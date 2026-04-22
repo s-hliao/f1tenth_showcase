@@ -22,6 +22,27 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Header, ColorRGBA
 from scipy import interpolate
 
+# TF transformations for euler angles
+def euler_from_quaternion(q):
+    """
+    Convert a quaternion into euler angles (roll, pitch, yaw)
+    roll is rotation around x in radians (counter-clockwise)
+    pitch is rotation around y in radians (counter-clockwise)
+    yaw is rotation around z in radians (counter-clockwise)
+    """
+    w, x, y, z = q.w, q.x, q.y, q.z
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = math.atan2(t0, t1)
+    t2 = +2.0 * (w * y - z * x)
+    t2 = +1.0 if t2 > +1.0 else t2
+    t2 = -1.0 if t2 < -1.0 else t2
+    pitch_y = math.asin(t2)
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = math.atan2(t3, t4)
+    return roll_x, pitch_y, yaw_z
+
 # class def for tree nodes
 # It's up to you if you want to use this
 class RRTNode(object):
@@ -45,32 +66,35 @@ class RRT(Node):
         # you could add your own parameters to the rrt_params.yaml file,
         # and get them here as class attributes as shown above.
         
-        self.wheelbase = 0.3
-        self.lookahead_dist = 1.5
+        # Parameters
+        self.wheelbase = 0.33
+        self.lookahead_dist = 2.0
         self.interpolate_interval = 10000
+        
+        # Occupancy grid parameters
+        self.grid_res = 0.1
+        self.grid_width = int(8.0 / self.grid_res)
+        self.grid_height = int(7.0 / self.grid_res)
+        self.grid_y_offset = int(4.0 / self.grid_res)
+        self.grid_x_offset = int(1.0 / self.grid_res)
+        self.occupancy_grid = np.zeros((self.grid_height, self.grid_width), dtype=bool)
 
         # RRT parameters
-        self.max_iter = 500
+        self.max_iter = 400
         self.step_size = 0.5
         self.goal_tolerance = 0.5
 
-        self.waypoints = self.load_waypoints("/sim_ws/src/f1tenth_lab6/lab6_pkg/scripts/path.csv")
+        # Waypoints
+        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_race3.csv")
+
+        # RRT attributes
+        self.raw_waypoints = self.waypoints # Lab 5 uses raw_waypoints for MarkerArray
 
         # TODO: create subscribers
-        self.pose_sub_ = self.create_subscription(
-            #PoseStamped,
-            Odometry,
-            pose_topic,
-            self.pose_callback,
-            1)
-        self.pose_sub_
-
-        self.scan_sub_ = self.create_subscription(
-            LaserScan,
-            scan_topic,
-            self.scan_callback,
-            1)
-        self.scan_sub_
+        self.pose_pub = self.create_subscription(
+            PoseStamped, "/pf/viz/inferred_pose", self.pose_callback, 1
+        )
+        self.scan_sub = self.create_subscription(LaserScan, "/scan", self.scan_callback, 1)
 
         # publishers
         # TODO: create a drive message publisher, and other publishers that you might need
@@ -82,35 +106,24 @@ class RRT(Node):
         self.grid_viz_pub = self.create_publisher(Marker, "/occupancy_grid_viz", 10)
         self.sample_viz_pub = self.create_publisher(Marker, "/sample_bounds_viz", 10)
 
+        # Timer
         self.timer = self.create_timer(0.5, self.publish_all_waypoints)
 
         # class attributes
         # TODO: maybe create your occupancy grid here
-        self.grid_res = 0.1
-        self.grid_width = int(10.0 / self.grid_res)
-        self.grid_height = int(10.0 / self.grid_res)
-        self.grid_y_offset = int(5.0 / self.grid_res)
-        self.grid_x_offset = int(5.0 / self.grid_res)
-        self.occupancy_grid = np.zeros((self.grid_height, self.grid_width), dtype=bool)
 
-    def load_waypoints(self, path): ## Expand from (N,2) [created points] to (self.interpolate_interval,2) [interpolated points]
+    def load_waypoints(self, path):
         data = np.genfromtxt(path, delimiter=",", skip_header=0)
-        self.raw_waypoints = data.tolist()
-        N,_ = data.shape
-        x = data[:, 0]
-        y = data[:, 1]
-
+        x, y = data[:, 0], data[:, 1]
         tick, _ = interpolate.splprep([x, y], s=0.0, k=2)
-
         points = np.linspace(0, 1, self.interpolate_interval)
-        x_aug_points, y_aug_points = interpolate.splev(points, tick)
-
-        # print(f'{x_aug_points.shape=}')
-
+        x_aug, y_aug = interpolate.splev(points, tick)
         out = np.zeros((self.interpolate_interval, 2))
-        out[:,0] = x_aug_points
-        out[:,1] = y_aug_points
+        out[:, 0], out[:, 1] = x_aug, y_aug
         return out.tolist()
+
+        # class attributes
+        # TODO: maybe create your occupancy grid here
 
     def scan_callback(self, scan_msg):
         """
@@ -452,7 +465,8 @@ class RRT(Node):
         
         # Sampling bounds
         sample_marker = Marker()
-        sample_marker.header.frame_id = "ego_racecar/laser"
+        sample_marker.header = Header(frame_id="map")
+        print(f'{sample_marker=}')
         sample_marker.header.stamp = self.get_clock().now().to_msg()
         sample_marker.ns = "sample_bounds"
         sample_marker.type = Marker.LINE_STRIP

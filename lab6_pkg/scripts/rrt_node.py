@@ -22,27 +22,6 @@ from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Header, ColorRGBA
 from scipy import interpolate
 
-# TF transformations for euler angles
-def euler_from_quaternion(q):
-    """
-    Convert a quaternion into euler angles (roll, pitch, yaw)
-    roll is rotation around x in radians (counter-clockwise)
-    pitch is rotation around y in radians (counter-clockwise)
-    yaw is rotation around z in radians (counter-clockwise)
-    """
-    w, x, y, z = q.w, q.x, q.y, q.z
-    t0 = +2.0 * (w * x + y * z)
-    t1 = +1.0 - 2.0 * (x * x + y * y)
-    roll_x = math.atan2(t0, t1)
-    t2 = +2.0 * (w * y - z * x)
-    t2 = +1.0 if t2 > +1.0 else t2
-    t2 = -1.0 if t2 < -1.0 else t2
-    pitch_y = math.asin(t2)
-    t3 = +2.0 * (w * z + x * y)
-    t4 = +1.0 - 2.0 * (y * y + z * z)
-    yaw_z = math.atan2(t3, t4)
-    return roll_x, pitch_y, yaw_z
-
 # class def for tree nodes
 # It's up to you if you want to use this
 class RRTNode(object):
@@ -66,62 +45,75 @@ class RRT(Node):
         # you could add your own parameters to the rrt_params.yaml file,
         # and get them here as class attributes as shown above.
         
-        # Parameters
-        self.wheelbase = 0.33
-        self.lookahead_dist = 2.0
+        self.wheelbase = 0.3
+        self.lookahead_dist = 1.5
         self.interpolate_interval = 10000
-        
-        # Occupancy grid parameters
-        self.grid_res = 0.1
-        self.grid_width = int(8.0 / self.grid_res)
-        self.grid_height = int(7.0 / self.grid_res)
-        self.grid_y_offset = int(4.0 / self.grid_res)
-        self.grid_x_offset = int(1.0 / self.grid_res)
-        self.occupancy_grid = np.zeros((self.grid_height, self.grid_width), dtype=bool)
 
         # RRT parameters
-        self.max_iter = 400
+        self.max_iter = 5
         self.step_size = 0.5
         self.goal_tolerance = 0.5
 
-        # Waypoints
-        self.waypoints = self.load_waypoints("/sim_ws/src/f1tenth_lab6/lab6_pkg/scripts/path.csv")
-
-        # RRT attributes
-        self.raw_waypoints = self.waypoints # Lab 5 uses raw_waypoints for MarkerArray
+        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_race3.csv")
 
         # TODO: create subscribers
-        self.odom_sub = self.create_subscription(Odometry, "/ego_racecar/odom", self.pose_callback, 1)
-        self.scan_sub = self.create_subscription(LaserScan, "/scan", self.scan_callback, 1)
+        # self.pose_sub_ = self.create_subscription(
+        #     #PoseStamped,
+        #     Odometry,
+        #     pose_topic,
+        #     self.pose_callback,
+        #     1)
+        self.pose_sub_ = self.create_subscription(
+            PoseStamped, "/pf/viz/inferred_pose", self.pose_callback, 100
+        )
+        self.pose_sub_
+
+        self.scan_sub_ = self.create_subscription(
+            LaserScan,
+            scan_topic,
+            self.scan_callback,
+            100)
+        self.scan_sub_
 
         # publishers
         # TODO: create a drive message publisher, and other publishers that you might need
         self.publisher = self.create_publisher(AckermannDriveStamped, "/drive", 10)
         self.tree_pub = self.create_publisher(MarkerArray, "/rrt_tree", 10)
         self.path_pub = self.create_publisher(Marker, "/rrt_path", 10)
-        self.marker_pub = self.create_publisher(MarkerArray, "/visualization_marker", 10)
+        self.marker_pub = self.create_publisher(Marker, "/visualization_marker", 10)
         self.current_mark_pub = self.create_publisher(Marker, "/cur_marker", 10)
         self.grid_viz_pub = self.create_publisher(Marker, "/occupancy_grid_viz", 10)
         self.sample_viz_pub = self.create_publisher(Marker, "/sample_bounds_viz", 10)
 
-        # Timer
         self.timer = self.create_timer(0.5, self.publish_all_waypoints)
 
         # class attributes
         # TODO: maybe create your occupancy grid here
+        self.grid_res = 0.05
+        self.grid_width = int(24.0 / self.grid_res)
+        self.grid_height = int(24.0 / self.grid_res)
+        self.grid_y_offset = int(12.0 / self.grid_res)
+        self.grid_x_offset = int(12.0 / self.grid_res)
+        self.occupancy_grid = np.zeros((self.grid_height, self.grid_width), dtype=bool)
 
-    def load_waypoints(self, path):
+    def load_waypoints(self, path): ## Expand from (N,2) [created points] to (self.interpolate_interval,2) [interpolated points]
         data = np.genfromtxt(path, delimiter=",", skip_header=0)
-        x, y = data[:, 0], data[:, 1]
-        tick, _ = interpolate.splprep([x, y], s=0.0, k=2)
-        points = np.linspace(0, 1, self.interpolate_interval)
-        x_aug, y_aug = interpolate.splev(points, tick)
-        out = np.zeros((self.interpolate_interval, 2))
-        out[:, 0], out[:, 1] = x_aug, y_aug
-        return out.tolist()
+        self.raw_waypoints = data.tolist()
+        N,_ = data.shape
+        x = data[:, 0]
+        y = data[:, 1]
 
-        # class attributes
-        # TODO: maybe create your occupancy grid here
+        tick, _ = interpolate.splprep([x, y], s=0.0, k=2)
+
+        points = np.linspace(0, 1, self.interpolate_interval)
+        x_aug_points, y_aug_points = interpolate.splev(points, tick)
+
+        # print(f'{x_aug_points.shape=}')
+
+        out = np.zeros((self.interpolate_interval, 2))
+        out[:,0] = x_aug_points
+        out[:,1] = y_aug_points
+        return out.tolist()
 
     def scan_callback(self, scan_msg):
         """
@@ -133,14 +125,16 @@ class RRT(Node):
 
         """
         ranges = np.array(scan_msg.ranges)
-        valid_idx = np.isfinite(ranges) & (ranges > scan_msg.range_min) & (ranges < scan_msg.range_max)
+        # valid_idx = np.isfinite(ranges) & (ranges > scan_msg.range_min) & (ranges < scan_msg.range_max)
+        min_safe_dist = 0.3
+        valid_idx = np.isfinite(ranges) & (ranges > min_safe_dist) & (ranges < scan_msg.range_max)
         angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
         
         x = ranges[valid_idx] * np.cos(angles[valid_idx])
         y = ranges[valid_idx] * np.sin(angles[valid_idx])
 
         new_grid = np.zeros((self.grid_height, self.grid_width), dtype=bool)
-        car_radius_cells = int(0.3 / self.grid_res)
+        car_radius_cells = int(0.1 / self.grid_res)
         ix = (x / self.grid_res).astype(int) + self.grid_x_offset
         iy = (y / self.grid_res).astype(int) + self.grid_y_offset
 
@@ -153,13 +147,17 @@ class RRT(Node):
                     n_ix, n_iy = ix + dx, iy + dy
                     v = (n_ix >= 0) & (n_ix < self.grid_height) & (n_iy >= 0) & (n_iy < self.grid_width)
                     new_grid[n_ix[v], n_iy[v]] = True
+        
+        deadzone_offset = int(-.5 / self.grid_res) 
+        rear_boundary = self.grid_x_offset + deadzone_offset
+        new_grid[:rear_boundary, :] = True
 
         self.occupancy_grid = new_grid
         self.publish_grid_markers(new_grid)
 
     def publish_grid_markers(self, grid):
         marker = Marker()
-        marker.header.frame_id = "ego_racecar/laser"
+        marker.header.frame_id = "laser"
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = "occupancy_grid"
         marker.id = 100
@@ -187,7 +185,7 @@ class RRT(Node):
 
         """
         ## This is like lab5 for localization
-        current_pose = pose_msg.pose.pose
+        current_pose = pose_msg.pose
         goal_point = self.get_lookahead_point(current_pose)
         
         self.publish_cur_waypoint(goal_point)
@@ -204,20 +202,19 @@ class RRT(Node):
 
         path_found = False
         goal_node = None
-        
         for _ in range(self.max_iter):
             sampled_pt = self.sample()
             
             # 20% bias logic: override sampled point 
-            if np.random.rand() < 0.2:
-                sampled_pt = (goal_x, goal_y)
+            # if np.random.rand() < 0.2:
+            #     sampled_pt = (goal_x, goal_y)
 
             nearest_idx = self.nearest(tree, sampled_pt)
             nearest_node = tree[nearest_idx]
             
             new_node = self.steer(nearest_node, sampled_pt)
-            
             if not self.check_collision(nearest_node, new_node):
+            # if True:
                 new_node.parent = nearest_node
                 tree.append(new_node)
                 
@@ -225,14 +222,12 @@ class RRT(Node):
                     path_found = True
                     goal_node = new_node
                     break
-                    
         if (not path_found) and len(tree) > 1:
             dists = [np.hypot(n.x - goal_x, n.y - goal_y) for n in tree]
             goal_node = tree[np.argmin(dists)]
             
         if goal_node is not None:
             path = self.find_path(tree, goal_node)
-            
             # pure pursuit on path
             if len(path) > 1:
                 target_idx = min(2, len(path) - 1)
@@ -428,7 +423,7 @@ class RRT(Node):
         # Tree
         tree_marker = MarkerArray()
         t_marker = Marker()
-        t_marker.header.frame_id = "ego_racecar/laser"
+        t_marker.header = Header(frame_id="laser")
         t_marker.header.stamp = self.get_clock().now().to_msg()
         t_marker.ns = "tree"
         t_marker.id = 0
@@ -447,7 +442,7 @@ class RRT(Node):
 
         # Path
         path_marker = Marker()
-        path_marker.header.frame_id = "ego_racecar/laser"
+        path_marker.header = Header(frame_id="laser")
         path_marker.header.stamp = self.get_clock().now().to_msg()
         path_marker.ns = "path"
         path_marker.id = 1
@@ -463,7 +458,7 @@ class RRT(Node):
         
         # Sampling bounds
         sample_marker = Marker()
-        sample_marker.header.frame_id = "ego_racecar/laser"
+        sample_marker.header = Header(frame_id="laser")
         sample_marker.header.stamp = self.get_clock().now().to_msg()
         sample_marker.ns = "sample_bounds"
         sample_marker.type = Marker.LINE_STRIP
@@ -490,23 +485,50 @@ class RRT(Node):
         marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
         self.current_mark_pub.publish(marker)
 
+    # def publish_all_waypoints(self):
+    #     marker_array = MarkerArray()
+    #     for idx, (x, y) in enumerate(self.raw_waypoints):
+    #         if idx % 50 != 0: continue
+    #         marker = Marker()
+    #         marker.header = Header(frame_id="map")
+    #         marker.header.stamp = self.get_clock().now().to_msg()
+    #         marker.ns = "waypoints"
+    #         marker.id = idx
+    #         marker.type = Marker.SPHERE
+    #         marker.action = Marker.ADD
+    #         marker.pose.position.x = float(x)
+    #         marker.pose.position.y = float(y)
+    #         marker.scale.x = marker.scale.y = marker.scale.z = 0.15
+    #         marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
+    #         marker_array.markers.append(marker)
+    #     self.marker_pub.publish(marker_array)
+
     def publish_all_waypoints(self):
-        marker_array = MarkerArray()
-        for idx, (x, y) in enumerate(self.raw_waypoints):
-            if idx % 50 != 0: continue
-            marker = Marker()
-            marker.header = Header(frame_id="map")
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.ns = "waypoints"
-            marker.id = idx
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-            marker.pose.position.x = float(x)
-            marker.pose.position.y = float(y)
-            marker.scale.x = marker.scale.y = marker.scale.z = 0.15
-            marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
-            marker_array.markers.append(marker)
-        self.marker_pub.publish(marker_array)
+        path_marker = Marker()
+        path_marker.header.frame_id = "map"
+        path_marker.ns = "smooth_path"
+        path_marker.id = 0
+        path_marker.type = Marker.LINE_STRIP
+        path_marker.scale.x = 0.05
+        path_marker.color.g = 1.0
+        path_marker.color.a = 1.0
+        for p in self.waypoints:
+            path_marker.points.append(Point(x=p[0], y=p[1], z=0.0))
+        self.marker_pub.publish(path_marker)
+
+        raw_marker = Marker()
+        raw_marker.header.frame_id = "map"
+        raw_marker.ns = "raw_points"
+        raw_marker.id = 1
+        raw_marker.type = Marker.SPHERE_LIST
+        raw_marker.scale.x = 0.15 
+        raw_marker.scale.y = 0.15
+        raw_marker.scale.z = 0.15
+        raw_marker.color.r = 1.0  
+        raw_marker.color.a = 1.0
+        for p in self.raw_waypoints:
+            raw_marker.points.append(Point(x=float(p[0]), y=float(p[1]), z=0.0))
+        self.marker_pub.publish(raw_marker)
 
 
     # The following methods are needed for RRT* and not RRT

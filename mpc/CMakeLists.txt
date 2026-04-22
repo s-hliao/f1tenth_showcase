@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(lab6_pkg)
+project(mpc)
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
@@ -35,24 +35,24 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-# # Create Cpp executable
-# add_executable(rrt_node src/rrt_node.cpp src/rrt.cpp)
+# Create Cpp executable
+add_executable(mpc_node src/mpc_node.cpp)
 
-# ament_target_dependencies(rrt_node 
-#   rclcpp geometry_msgs ackermann_msgs nav_msgs sensor_msgs std_msgs visualization_msgs tf2_ros
-# )
+ament_target_dependencies(mpc_node 
+  rclcpp geometry_msgs ackermann_msgs nav_msgs sensor_msgs std_msgs visualization_msgs tf2_ros
+)
 
-# # Install Cpp executables
-# install(TARGETS
-#   rrt_node
-#   DESTINATION lib/${PROJECT_NAME})
+# Install Cpp executables
+install(TARGETS
+  mpc_node
+  DESTINATION lib/${PROJECT_NAME})
 
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
-  scripts/rrt_node.py
+  scripts/mpc_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

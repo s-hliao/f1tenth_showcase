@@ -1,6 +1,6 @@
 from setuptools import setup
 
-package_name = 'lab6_pkg'
+package_name = 'mpc'
 
 setup(
     name=package_name,
@@ -13,14 +13,14 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='zzangupenn',
-    maintainer_email='zzang@seas.upenn.edu',
-    description='f1tenth lab6_pkg',
-    license='TODO: License declaration',
+    maintainer='zzangupenn, Hongrui Zheng',
+    maintainer_email='zzang@seas.upenn.edu, billyzheng.bz@gmail.com',
+    description='f1tenth mpc',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'rrt_node = lab6_pkg.rrt_node:main',
+            'mpc_node = mpc.mpc_node:main',
         ],
     },
 )
