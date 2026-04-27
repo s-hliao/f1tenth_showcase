@@ -73,8 +73,9 @@ class MPC(Node):
         #       use the MPC as a tracker (similar to pure pursuit)
         self.publisher = self.create_publisher(AckermannDriveStamped, "/drive", 10)
         self.pose_sub_ = self.create_subscription(
-            PoseStamped,
-            "/pf/viz/inferred_pose",
+            # PoseStamped,
+            Odometry,
+            "/ego_racecar/odom",
             self.pose_callback,
             1,
         )
@@ -90,7 +91,7 @@ class MPC(Node):
 
         # TODO: get waypoints here
         self.interpolate_interval = 10000
-        self.waypoints = self.load_waypoints("./src/mpc/scripts/path.csv")
+        self.waypoints = self.load_waypoints("/sim_ws/src/f1tenth_lab7/mpc/scripts/path_race4.csv")
 
         self.odelta = None
         self.oa = None
@@ -99,11 +100,6 @@ class MPC(Node):
 
         # initialize MPC problem
         self.mpc_prob_init()
-
-        self.prev_x = None
-        self.prev_y = None
-        self.prev_time = None
-        self.velocity = 0.0 # 初始速度
 
     def load_waypoints(
         self, path
@@ -151,53 +147,20 @@ class MPC(Node):
 
     def wrap2pi(self,angle):
         return (angle + np.pi) % (2 * np.pi) - np.pi
-    
-    def calculate_velocity(self, current_x, current_y, current_timestamp):
-        # 將 ROS 時間轉為秒 (float)
-        t_now = current_timestamp.sec + current_timestamp.nanosec * 1e-9
-        
-        if self.prev_x is None:
-            self.prev_x = current_x
-            self.prev_y = current_y
-            self.prev_time = t_now
-            return 0.0
-
-        # 計算距離差 (歐幾里得距離)
-        dist = np.sqrt((current_x - self.prev_x)**2 + (current_y - self.prev_y)**2)
-        
-        # 計算時間差
-        dt = t_now - self.prev_time
-        
-        # 避免除以零或太短的時間間隔
-        if dt > 0.001: 
-            v = dist / dt
-            # 更新成員變數供下次使用
-            self.prev_x = current_x
-            self.prev_y = current_y
-            self.prev_time = t_now
-            
-            # 簡單的低通濾波器，防止數值抖動導致 MPC 不穩定
-            self.velocity = 0.8 * self.velocity + 0.2 * v
-        
-        return self.velocity
 
     def pose_callback(self, pose_msg):
         # TODO: extract pose from ROS msg
         vehicle_state = State()
-        pose = pose_msg.pose.position
+        pose = pose_msg.pose.pose.position
         vehicle_state.x = pose.x
         vehicle_state.y = pose.y
-
-        orientation = pose_msg.pose.orientation
+        orientation = pose_msg.pose.pose.orientation
         yaw = np.arctan2(
             2 * (orientation.w * orientation.z + orientation.x * orientation.y),
             1 - 2 * (orientation.y**2 + orientation.z**2),
         )
+        vehicle_state.v = pose_msg.twist.twist.linear.x
         vehicle_state.yaw = yaw
-
-        vehicle_state.v = self.calculate_velocity(pose.x, pose.y, pose_msg.header.stamp)
-    
-        self.vehicle_state = vehicle_state
 
         # TODO: Calculate the next reference trajectory for the next T steps
         #       with current vehicle pose.
@@ -227,12 +190,10 @@ class MPC(Node):
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta)
 
         # TODO: publish drive message.
-        if self.odelta is not None and self.oa is not None:
-            drive_msg = AckermannDriveStamped()
-            drive_msg.drive.steering_angle = float(self.odelta[0])
-            drive_msg.drive.speed = float(vehicle_state.v + self.oa[0] * self.config.DTK * .5)
-            # drive_msg.drive.speed = .5
-            self.publisher.publish(drive_msg)
+        drive_msg = AckermannDriveStamped()
+        drive_msg.drive.steering_angle = float(self.odelta[0])
+        drive_msg.drive.speed = float(vehicle_state.v + self.oa[0] * self.config.DTK)
+        self.publisher.publish(drive_msg)
 
         if ox is not None and oy is not None:
             self.publish_predicted_traj(ox, oy)
@@ -607,9 +568,8 @@ class MPC(Node):
         marker_array = MarkerArray()
         for idx in range(0, len(ref_x), 100):
             marker = Marker()
-            marker.ns = "all_waypoints" 
-            marker.id = idx
             marker.header = Header(frame_id="map")
+            marker.id = idx
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD

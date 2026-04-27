@@ -1,0 +1,31 @@
+# RealSense color camera intrinsics (1280x720)
+# Source: camera_intrinsics_color.npz (checkerboard calibration, reproj_error=0.154 px)
+camera_matrix:
+  fx: 895.21928782
+  fy: 895.77576320
+  cx: 638.37371331
+  cy: 350.15291942
+
+dist_coeffs: [0.05117728, 0.16522497, -0.00100642, 0.00016078, -0.92041143]
+
+image_size: [1280, 720]
+
+# Initial extrinsic guess: T_cam_lidar  (6-DOF, camera frame FROM lidar frame)
+# Coordinate frames:
+#   LiDAR (ROS): x=forward, y=left,  z=up
+#   Camera (OpenCV): x=right, y=down, z=forward
+#
+# Adjust tx/ty/tz based on physical mounting (meters).
+# Adjust rx/ry/rz (radians) based on sensor orientation.
+# Rule of thumb for F1Tenth (LiDAR and camera both face forward):
+#   LiDAR: x=forward, y=left,  z=up
+#   Camera: x=right,  y=down,  z=forward
+#   Required rotation:  rx= π/2,  ry=-π/2,  rz=0
+#   A point 2 m in front projects to the image centre with these values.
+initial_extrinsic:
+  tx: 0.0
+  ty: 0.0
+  tz: 0.0
+  rx:  1.5708   # π/2
+  ry: -1.5708   # -π/2
+  rz:  0.0
