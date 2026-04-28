@@ -528,7 +528,7 @@ class DepthFusionNode(Node):
 
     # ------------------------------------------------------------------
     # Zoomed metrics plot — sliding 5-second window
-    # x-axis shows absolute elapsed time; right edge = now, scrolls forward
+    # x-axis is relative: right edge = window_s ("now"), left edge = 0 ("5 s ago")
     # ------------------------------------------------------------------
     def _make_zoom_plot(self, window_s: float = 5.0) -> np.ndarray:
         with self._metrics_lock:
@@ -540,12 +540,13 @@ class DepthFusionNode(Node):
         t_left   = t_now - window_s
         windowed = [h for h in history if h[0] >= t_left] or [history[-1]]
 
-        times       = [h[0] for h in windowed]
+        # Normalize: rightmost point is always at x = window_s; left edge = 0
+        times       = [h[0] - t_now + window_s for h in windowed]
         abs_rels    = [h[1] for h in windowed]
         maes        = [h[2] for h in windowed]
         abs_rels_ls = [h[3] for h in windowed]
         maes_ls     = [h[4] for h in windowed]
-        xlim = (t_now - window_s, t_now)
+        xlim = (0.0, window_s)
         return self._render_metrics_figure(
             times, abs_rels, maes, abs_rels_ls, maes_ls, xlim,
             title_suffix="  [last 5 s]")

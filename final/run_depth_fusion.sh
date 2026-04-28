@@ -31,8 +31,8 @@
 #
 # Examples:
 #   bash run_depth_fusion.sh
-#   bash run_depth_fusion.sh --guidance camera --max-gt-depth 3.0 --anchor-row 430
-#   bash run_depth_fusion.sh --guidance lidar --tx 0.05 --ty 0.1 --tz 0.3 --trt --cam-fps 15
+#   bash run_depth_fusion.sh --guidance camera --max-gt-depth 3.0 --anchor-row 250 --trt
+#   bash run_depth_fusion.sh --guidance lidar --tx 0.05 --ty 0.1 --tz 0.3 --trt --cam-fps 15 --inlier-rel-tol 0.1 --max-gt-depth 3.0
 #   bash run_depth_fusion.sh --guidance lidar --tx 0.05 --ty 0.1 --tz 0.3 \
 #                            --rx 0.0 --ry -0.17 --rz 0.0 --scan-topic /scan
 #   bash run_depth_fusion.sh --trt --cam-fps 15
