@@ -13,7 +13,7 @@ class WaypointLogger(Node):
             PointStamped, "/clicked_point", self.waypoint_callback, 10
         )
 
-        file_path = "./path_race3.csv"
+        file_path = "./path_racePenn.csv"
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
         self.csv_file = open(file_path, "w", newline="")

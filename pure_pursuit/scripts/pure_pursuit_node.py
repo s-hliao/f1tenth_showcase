@@ -15,7 +15,7 @@ class PurePursuit(Node):
     def __init__(self):
         super().__init__("pure_pursuit_node")
         print(os.getcwd())
-        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_race3.csv")
+        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn.csv")
 
         self.subscription = self.create_subscription(
             PoseStamped, "/pf/viz/inferred_pose", self.pose_callback, 10
@@ -33,6 +33,9 @@ class PurePursuit(Node):
         self.raw_waypoints = data.tolist()
         x = data[:, 0]
         y = data[:, 1]
+
+        x = np.append(x,data[0,0])
+        y = np.append(y,data[0,1])
 
         tck, _ = interpolate.splprep([x, y], s=0.0, k=2)
 

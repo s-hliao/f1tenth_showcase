@@ -49,6 +49,8 @@ import sys
 import threading
 import time
 import collections
+import csv
+from datetime import datetime
 
 import numpy as np
 import cv2
@@ -107,6 +109,8 @@ class DepthFusionNode(Node):
         self.declare_parameter("rx",  1.5708)  # LiDAR→camera rotation, ZYX Euler (rad)
         self.declare_parameter("ry", -1.5708)  # R = Rz·Ry·Rx → maps x-fwd/y-left/z-up to x-right/y-down/z-fwd
         self.declare_parameter("rz",  0.0)
+        self.declare_parameter("benchmark_csv", "")
+        self.declare_parameter("benchmark_warmup_frames", 10)
 
         self.anchor_row     = self.get_parameter("anchor_row").value
         self.max_depth      = self.get_parameter("max_depth").value
@@ -125,6 +129,8 @@ class DepthFusionNode(Node):
         self.rx = self.get_parameter("rx").value
         self.ry = self.get_parameter("ry").value
         self.rz = self.get_parameter("rz").value
+        self.benchmark_csv = str(self.get_parameter("benchmark_csv").value)
+        self.benchmark_warmup_frames = int(self.get_parameter("benchmark_warmup_frames").value)
 
         self._R_lc, self._t_lc = self._build_T_lc(
             self.rx, self.ry, self.rz, self.tx, self.ty, self.tz)
@@ -138,15 +144,24 @@ class DepthFusionNode(Node):
         self._stop_ev  = threading.Event()
 
         # Latest frame shared between RealSense thread → inference thread
-        self._frame_lock  = threading.Lock()
-        self._latest_rgb  = None
-        self._latest_gt   = None
-        self._frame_ready = threading.Event()
+        self._frame_lock    = threading.Lock()
+        self._latest_rgb    = None
+        self._latest_gt     = None
+        self._latest_frame_t = None
+        self._frame_ready   = threading.Event()
 
         # Metrics history (time_s, abs_rel, mae) — keep last 300 frames
         self._metrics_lock    = threading.Lock()
         self._metrics_history = collections.deque(maxlen=300)
         self._t_start         = time.monotonic()
+
+        # Benchmark CSV logger
+        self._benchmark_file = None
+        self._benchmark_writer = None
+        self._benchmark_frame_id = 0
+        self._benchmark_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._benchmark_last_row_t = None
+        self._init_benchmark_logger()
 
         anchor_desc = str(self.anchor_row) if self.anchor_row >= 0 else "auto"
         backend = "TensorRT" if self.use_trt else "PyTorch"
@@ -198,6 +213,109 @@ class DepthFusionNode(Node):
     def _scan_callback(self, msg):
         with self._scan_lock:
             self._latest_scan = msg
+
+    # ------------------------------------------------------------------
+    # Benchmark CSV logging
+    # ------------------------------------------------------------------
+    def _init_benchmark_logger(self):
+        """Open benchmark CSV if benchmark_csv param is set."""
+        if not self.benchmark_csv:
+            return
+
+        path = os.path.expanduser(self.benchmark_csv)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+        fieldnames = [
+            "run_id",
+            "frame_id",
+            "timestamp_wall",
+            "elapsed_s",
+
+            "guidance_mode",
+            "use_trt",
+            "cam_width",
+            "cam_height",
+            "cam_fps_requested",
+            "max_gt_depth",
+            "max_depth",
+            "inlier_rel_tol",
+            "tx",
+            "ty",
+            "tz",
+            "rx",
+            "ry",
+            "rz",
+            "scan_topic",
+
+            "capture_age_ms",
+            "inference_ms",
+            "scale_fit_ms",
+            "metric_compute_ms",
+            "viz_build_ms",
+            "total_loop_ms",
+            "fps_from_total_loop",
+            "actual_output_fps",
+
+            "mae",
+            "absrel",
+            "rmse",
+            "mae_ls",
+            "absrel_ls",
+            "rmse_ls",
+            "num_eval_pixels",
+
+            "s",
+            "t",
+            "s_ls",
+            "t_ls",
+            "n_valid",
+            "n_inliers",
+            "inlier_ratio",
+            "anchor_row",
+
+            "lidar_projected_points",
+            "lidar_no_disp_points",
+            "lidar_inlier_points",
+            "lidar_outlier_points",
+        ]
+
+        self._benchmark_file = open(path, "w", newline="")
+        self._benchmark_writer = csv.DictWriter(
+            self._benchmark_file,
+            fieldnames=fieldnames,
+            extrasaction="ignore",
+        )
+        self._benchmark_writer.writeheader()
+        self._benchmark_file.flush()
+
+        self.get_logger().info(
+            f"Benchmark CSV enabled: {path} "
+            f"(warmup_frames={self.benchmark_warmup_frames})"
+        )
+
+    def _write_benchmark_row(self, row: dict):
+        """Write one benchmark row after warmup frames."""
+        frame_id = self._benchmark_frame_id
+        self._benchmark_frame_id += 1
+
+        if self._benchmark_writer is None:
+            return
+
+        if frame_id < self.benchmark_warmup_frames:
+            return
+
+        row["frame_id"] = frame_id
+        self._benchmark_writer.writerow(row)
+        self._benchmark_file.flush()
+
+    def _close_benchmark_logger(self):
+        if self._benchmark_file is not None:
+            self._benchmark_file.flush()
+            self._benchmark_file.close()
+            self._benchmark_file = None
+            self._benchmark_writer = None
 
     # ------------------------------------------------------------------
     # Model loading
@@ -278,6 +396,7 @@ class DepthFusionNode(Node):
                 with self._frame_lock:
                     self._latest_rgb = rgb_bgr
                     self._latest_gt  = depth_m
+                    self._latest_frame_t = time.perf_counter()
                 self._frame_ready.set()
         finally:
             pipeline.stop()
@@ -298,13 +417,19 @@ class DepthFusionNode(Node):
             with self._frame_lock:
                 rgb_bgr = self._latest_rgb
                 d_gt    = self._latest_gt
+                frame_t = self._latest_frame_t
 
             if rgb_bgr is None or d_gt is None:
                 continue
 
-            t0 = time.monotonic()
+            t_loop0 = time.perf_counter()
+            capture_age_ms = (
+                (t_loop0 - frame_t) * 1000.0
+                if frame_t is not None else float("nan")
+            )
 
             # ---- DAv2 inference ----
+            t_infer0 = time.perf_counter()
             try:
                 if not self.use_trt:
                     import torch
@@ -313,9 +438,11 @@ class DepthFusionNode(Node):
             except (RuntimeError, Exception) as e:
                 self.get_logger().error(f"Inference failed: {e} — skipping frame")
                 continue
+            t_infer1 = time.perf_counter()
 
             # ---- Scale fit ----
             lidar_pts = []
+            t_fit0 = time.perf_counter()
             try:
                 if self.guidance_mode == "lidar":
                     with self._scan_lock:
@@ -339,28 +466,49 @@ class DepthFusionNode(Node):
                     f"Scale fit error: {_e}\n{_tb.format_exc()}")
                 continue
 
+            t_fit1 = time.perf_counter()
+
             if s is None:
                 self.get_logger().warn("Scale fit failed — insufficient anchor pixels")
                 continue
 
+            # ---- Metric depth + error metrics ----
+            t_metric0 = time.perf_counter()
+
             d_metric    = np.clip(s    * d_disp + t,    0.0, self.max_depth).astype(np.float32)
             d_metric_ls = np.clip(s_ls * d_disp + t_ls, 0.0, self.max_depth).astype(np.float32)
-            dt = time.monotonic() - t0
 
-            # ---- Compute metrics on valid GT pixels within max_gt_depth ----
+            abs_rel = mae = rmse = float("nan")
+            abs_rel_ls = mae_ls = rmse_ls = float("nan")
+
             eval_mask = (d_gt > 0) & (d_gt <= self.max_gt_depth)
-            if eval_mask.sum() > 0:
+            num_eval_pixels = int(eval_mask.sum())
+
+            if num_eval_pixels > 0:
                 gt_v       = d_gt[eval_mask]
                 pred_v     = d_metric[eval_mask]
                 pred_ls_v  = d_metric_ls[eval_mask]
-                abs_rel    = float(np.mean(np.abs(pred_v    - gt_v) / (gt_v + EPS)))
-                mae        = float(np.mean(np.abs(pred_v    - gt_v)))
-                abs_rel_ls = float(np.mean(np.abs(pred_ls_v - gt_v) / (gt_v + EPS)))
-                mae_ls     = float(np.mean(np.abs(pred_ls_v - gt_v)))
+
+                err        = pred_v - gt_v
+                err_ls     = pred_ls_v - gt_v
+
+                abs_rel    = float(np.mean(np.abs(err)    / (gt_v + EPS)))
+                mae        = float(np.mean(np.abs(err)))
+                rmse       = float(np.sqrt(np.mean(err ** 2)))
+
+                abs_rel_ls = float(np.mean(np.abs(err_ls) / (gt_v + EPS)))
+                mae_ls     = float(np.mean(np.abs(err_ls)))
+                rmse_ls    = float(np.sqrt(np.mean(err_ls ** 2)))
+
                 elapsed = time.monotonic() - self._t_start
                 with self._metrics_lock:
                     self._metrics_history.append((elapsed, abs_rel, mae, abs_rel_ls, mae_ls))
 
+            t_metric1 = time.perf_counter()
+
+            # Keep this dt for the existing on-screen annotation/log behavior.
+            dt = t_metric1 - t_loop0
+            t_viz0 = time.perf_counter()
             # ---- Shared colormap scale ----
             valid_gt = (d_gt > 0) & (d_gt <= self.max_gt_depth)
             if self.display_vmax > 0:
@@ -437,11 +585,94 @@ class DepthFusionNode(Node):
             depth_win = np.hstack([c_estimated, c_gt, colorbar])
             metrics_win = self._make_metrics_plot()
             zoom_win    = self._make_zoom_plot()
+            t_viz1 = time.perf_counter()
 
             with self._frame_lock:
                 self._viz_depth   = depth_win
                 self._viz_metrics = metrics_win
                 self._viz_zoom    = zoom_win
+
+            t_loop1 = time.perf_counter()
+
+            total_loop_ms = (t_loop1 - t_loop0) * 1000.0
+            inference_ms = (t_infer1 - t_infer0) * 1000.0
+            scale_fit_ms = (t_fit1 - t_fit0) * 1000.0
+            metric_compute_ms = (t_metric1 - t_metric0) * 1000.0
+            viz_build_ms = (t_viz1 - t_viz0) * 1000.0
+
+            fps_from_total_loop = (
+                1000.0 / total_loop_ms if total_loop_ms > 0 else float("nan")
+            )
+
+            if self._benchmark_last_row_t is None:
+                actual_output_fps = float("nan")
+            else:
+                frame_period = t_loop1 - self._benchmark_last_row_t
+                actual_output_fps = 1.0 / frame_period if frame_period > 0 else float("nan")
+            self._benchmark_last_row_t = t_loop1
+
+            lidar_projected_points = len(lidar_pts)
+            lidar_no_disp_points = sum(1 for _, _, status in lidar_pts if status == 0)
+            lidar_inlier_points = sum(1 for _, _, status in lidar_pts if status == 1)
+            lidar_outlier_points = sum(1 for _, _, status in lidar_pts if status == 2)
+
+            inlier_ratio = (
+                float(n_inliers) / float(n_valid)
+                if n_valid > 0 else float("nan")
+            )
+
+            self._write_benchmark_row({
+                "run_id": self._benchmark_run_id,
+                "timestamp_wall": time.time(),
+                "elapsed_s": time.monotonic() - self._t_start,
+
+                "guidance_mode": self.guidance_mode,
+                "use_trt": self.use_trt,
+                "cam_width": self.cam_width,
+                "cam_height": self.cam_height,
+                "cam_fps_requested": self.cam_fps,
+                "max_gt_depth": self.max_gt_depth,
+                "max_depth": self.max_depth,
+                "inlier_rel_tol": self.inlier_rel_tol,
+                "tx": self.tx,
+                "ty": self.ty,
+                "tz": self.tz,
+                "rx": self.rx,
+                "ry": self.ry,
+                "rz": self.rz,
+                "scan_topic": self.scan_topic,
+
+                "capture_age_ms": capture_age_ms,
+                "inference_ms": inference_ms,
+                "scale_fit_ms": scale_fit_ms,
+                "metric_compute_ms": metric_compute_ms,
+                "viz_build_ms": viz_build_ms,
+                "total_loop_ms": total_loop_ms,
+                "fps_from_total_loop": fps_from_total_loop,
+                "actual_output_fps": actual_output_fps,
+
+                "mae": mae,
+                "absrel": abs_rel,
+                "rmse": rmse,
+                "mae_ls": mae_ls,
+                "absrel_ls": abs_rel_ls,
+                "rmse_ls": rmse_ls,
+                "num_eval_pixels": num_eval_pixels,
+
+                "s": s,
+                "t": t,
+                "s_ls": s_ls,
+                "t_ls": t_ls,
+                "n_valid": n_valid,
+                "n_inliers": n_inliers,
+                "inlier_ratio": inlier_ratio,
+                "anchor_row": row,
+
+                "lidar_projected_points": lidar_projected_points,
+                "lidar_no_disp_points": lidar_no_disp_points,
+                "lidar_inlier_points": lidar_inlier_points,
+                "lidar_outlier_points": lidar_outlier_points,
+            })
 
             if row >= 0:
                 self.get_logger().info(
@@ -731,6 +962,7 @@ class DepthFusionNode(Node):
 
     def shutdown(self):
         self._stop_ev.set()
+        self._close_benchmark_logger()
         if self.use_trt and self._model is not None:
             self._model.close()
 

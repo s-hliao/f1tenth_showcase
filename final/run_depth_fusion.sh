@@ -65,6 +65,8 @@ while [[ $# -gt 0 ]]; do
         --cam-fps)        ROS_PARAMS+=("-p" "cam_fps:=$2");        shift 2 ;;
         --cam-width)      ROS_PARAMS+=("-p" "cam_width:=$2");      shift 2 ;;
         --cam-height)     ROS_PARAMS+=("-p" "cam_height:=$2");     shift 2 ;;
+        --benchmark-csv)           ROS_PARAMS+=("-p" "benchmark_csv:=$2");           shift 2 ;;
+        --benchmark-warmup-frames) ROS_PARAMS+=("-p" "benchmark_warmup_frames:=$2"); shift 2 ;;
         --trt)            ROS_PARAMS+=("-p" "use_trt:=true");      shift   ;;
         *)                PASSTHROUGH+=("$1");                     shift   ;;
     esac

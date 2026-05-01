@@ -73,13 +73,20 @@ class MPC(Node):
         #       use the MPC as a tracker (similar to pure pursuit)
         self.publisher = self.create_publisher(AckermannDriveStamped, "/drive", 10)
         self.pose_sub_ = self.create_subscription(
-            # PoseStamped,
-            Odometry,
-            "/ego_racecar/odom",
+            PoseStamped,
+            "/pf/viz/inferred_pose",
             self.pose_callback,
             1,
         )
         self.pose_sub_
+        self.odom_sub_ = self.create_subscription(
+            Odometry,
+            "/ego_racecar/odom",
+            self._odom_callback,
+            1,
+        )
+        self.odom_sub_
+        self._current_v = 0.0
 
         self.marker_pub = self.create_publisher(MarkerArray, "/visualization_marker", 10)
         self.cur_goal_pub = self.create_publisher(Marker, "/cur_marker", 10)
@@ -91,7 +98,7 @@ class MPC(Node):
 
         # TODO: get waypoints here
         self.interpolate_interval = 10000
-        self.waypoints = self.load_waypoints("/sim_ws/src/f1tenth_lab7/mpc/scripts/path_race4.csv")
+        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/path_racePenn.csv")
 
         self.odelta = None
         self.oa = None
@@ -148,18 +155,21 @@ class MPC(Node):
     def wrap2pi(self,angle):
         return (angle + np.pi) % (2 * np.pi) - np.pi
 
+    def _odom_callback(self, odom_msg):
+        self._current_v = odom_msg.twist.twist.linear.x
+
     def pose_callback(self, pose_msg):
         # TODO: extract pose from ROS msg
         vehicle_state = State()
-        pose = pose_msg.pose.pose.position
+        pose = pose_msg.pose.position
         vehicle_state.x = pose.x
         vehicle_state.y = pose.y
-        orientation = pose_msg.pose.pose.orientation
+        orientation = pose_msg.pose.orientation
         yaw = np.arctan2(
             2 * (orientation.w * orientation.z + orientation.x * orientation.y),
             1 - 2 * (orientation.y**2 + orientation.z**2),
         )
-        vehicle_state.v = pose_msg.twist.twist.linear.x
+        vehicle_state.v = self._current_v
         vehicle_state.yaw = yaw
 
         # TODO: Calculate the next reference trajectory for the next T steps

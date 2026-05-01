@@ -109,6 +109,11 @@ public:
         pose_sub_  = create_subscription<geometry_msgs::msg::PoseStamped>(
             "/pf/viz/inferred_pose", 1,
             std::bind(&MPC::pose_callback, this, std::placeholders::_1));
+        odom_sub_  = create_subscription<nav_msgs::msg::Odometry>(
+            "/ego_racecar/odom", 1,
+            [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
+                last_v_ = msg->twist.twist.linear.x;
+            });
 
         marker_pub_   = create_publisher<visualization_msgs::msg::MarkerArray>("/visualization_marker", 10);
         cur_goal_pub_ = create_publisher<visualization_msgs::msg::Marker>("/cur_marker", 10);
@@ -117,7 +122,7 @@ public:
         wp_timer_     = create_wall_timer(std::chrono::milliseconds(500),
                                          std::bind(&MPC::publish_all_waypoints, this));
 
-        load_waypoints("/home/team10/f1tenth_ws/src/mpc/scripts/path_race4.csv");
+        load_waypoints("/home/team10/f1tenth_ws/path_racePenn.csv");
         build_qp();
 
         oa_.assign(TK, 0.0);
@@ -133,7 +138,9 @@ public:
 private:
     // ── publishers / subscribers ────────────────────────────────────────────
     rclcpp::Publisher<ackermann_msgs::msg::AckermannDriveStamped>::SharedPtr drive_pub_;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+    double last_v_{0.0};
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr cur_goal_pub_, pred_pub_, ref_pub_;
     rclcpp::TimerBase::SharedPtr wp_timer_;
@@ -631,12 +638,12 @@ private:
     // ── pose callback ────────────────────────────────────────────────────────
     void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        auto& pos  = msg->pose.pose.position;
-        auto& quat = msg->pose.pose.orientation;
+        auto& pos  = msg->pose.position;
+        auto& quat = msg->pose.orientation;
         double yaw = std::atan2(
             2.0*(quat.w*quat.z + quat.x*quat.y),
             1.0 - 2.0*(quat.y*quat.y + quat.z*quat.z));
-        double v = msg->twist.twist.linear.x;
+        double v = last_v_;
 
         Eigen::Vector4d x0{pos.x, pos.y, v, yaw};
 
