@@ -203,6 +203,7 @@ class MPC(Node):
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = float(self.odelta[0])
         drive_msg.drive.speed = float(vehicle_state.v + self.oa[0] * self.config.DTK)
+        print(f'{drive_msg.drive.speed=}')
         self.publisher.publish(drive_msg)
 
         if ox is not None and oy is not None:
@@ -402,6 +403,16 @@ class MPC(Node):
 
         # Find nearest index/setpoint from where the trajectories are calculated
         _, _, _, ind = nearest_point(np.array([state.x, state.y]), np.array([cx, cy]).T)
+
+        # Skip waypoints that are too close — mirrors RRT's min_range filter for nearby objects
+        MIN_LOOKAHEAD = 0.3  # m
+        for _ in range(ncourse):
+            dx = cx[ind] - state.x
+            dy = cy[ind] - state.y
+            if np.sqrt(dx**2 + dy**2) >= MIN_LOOKAHEAD:
+                break
+            ind = (ind + 1) % ncourse
+
         self.publish_cur_waypoint(cx[ind], cy[ind])
 
         # Load the initial parameters from the setpoint into the trajectory

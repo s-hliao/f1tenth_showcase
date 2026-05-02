@@ -20,13 +20,13 @@ RRT::RRT() : rclcpp::Node("rrt_node"), gen((std::random_device())()),
 
     // Occupancy grid
     grid_res_      = 0.05;
-    grid_width_    = static_cast<int>(24.0 / grid_res_);    // 480
-    grid_height_   = static_cast<int>(24.0 / grid_res_);    // 480
-    grid_x_offset_ = static_cast<int>(12.0 / grid_res_);    // 240
-    grid_y_offset_ = static_cast<int>(12.0 / grid_res_);    // 240
+    grid_width_    = static_cast<int>(6.0 / grid_res_);    // 480
+    grid_height_   = static_cast<int>(6.0 / grid_res_);    // 480
+    grid_x_offset_ = static_cast<int>(3.0 / grid_res_);    // 240
+    grid_y_offset_ = static_cast<int>(3.0 / grid_res_);    // 240
     occupancy_grid_.assign(grid_height_ * grid_width_, false);
 
-    load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_race3.csv");
+    load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn_2.csv");
 
     // Subscribers
     pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -253,10 +253,14 @@ void RRT::pose_callback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr po
 
         ackermann_msgs::msg::AckermannDriveStamped drive_msg;
         double steering_angle = std::max(-0.4, std::min(0.4, curvature * wheelbase_));
-        double abs_angle = std::abs(steering_angle);
-        double speed = 0.5;
-        if (abs_angle < 10.0) speed = 0.75;
-        else if (abs_angle < 20.0) speed = 1.0;
+        // double abs_angle = std::abs(steering_angle);
+        double steering_ratio = std::abs(steering_angle) / .5;
+
+
+        steering_ratio = std::min(1.0, std::max(0.0, steering_ratio));
+        double max_speed = 4.2;
+        double min_speed = 1.5;
+        double speed = max_speed - (max_speed - min_speed) * steering_ratio;
 
         drive_msg.drive.steering_angle = static_cast<float>(steering_angle);
         drive_msg.drive.speed = static_cast<float>(speed);

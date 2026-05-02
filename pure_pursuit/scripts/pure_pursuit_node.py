@@ -15,7 +15,7 @@ class PurePursuit(Node):
     def __init__(self):
         super().__init__("pure_pursuit_node")
         print(os.getcwd())
-        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn.csv")
+        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn_3.csv")
 
         self.subscription = self.create_subscription(
             PoseStamped, "/pf/viz/inferred_pose", self.pose_callback, 10
@@ -23,8 +23,11 @@ class PurePursuit(Node):
         self.marker_pub = self.create_publisher(Marker, "/visualization_marker", 10)
         self.publisher = self.create_publisher(AckermannDriveStamped, "/drive", 10)
 
-        self.lookahead_dist = 0.75
-        self.wheelbase = 0.33
+        self.lookahead_dist = 1.0
+        self.wheelbase = 0.324 
+
+        self.prev_steer = 0.0
+        self.steer_alpha = 0.25 
 
         self.timer = self.create_timer(10, self.publish_all_waypoints)
 
@@ -65,18 +68,36 @@ class PurePursuit(Node):
         # drive_msg.drive.steering_angle = np.clip(
         #     curvature * self.wheelbase, -0.4189, 0.4189
         # )
+
+        # Ackermann form δ = atan(L · κ)
+        # steering_angle = np.clip(
+        #     curvature * self.wheelbase, -0.4, 0.4
+        # )
         steering_angle = np.clip(
-            curvature * self.wheelbase, -0.4, 0.4
+            np.arctan(curvature * self.wheelbase), -0.4, 0.4
         )
+
+        # Low-pass filter on steering to absorb particle-filter jitter
+        steering_angle = (self.steer_alpha * self.prev_steer
+                          + (1.0 - self.steer_alpha) * steering_angle)
+        self.prev_steer = float(steering_angle)
+
         abs_angle = np.abs(steering_angle)
         print(f'{abs_angle=}')
-        speed = 1.
-        if abs_angle < 0.39:
-            speed = 1.5
-        elif abs_angle < 10:
-             speed = 1.0
-        elif abs_angle < 20:
-             speed = 1.2
+
+        # Linear ramp instead of 1.0↔3.0 cliff
+        # speed = 1.
+        # if abs_angle < 0.39:
+        #     speed = 3.
+        # elif abs_angle < 10:
+        #      speed = 1.0
+        # elif abs_angle < 20:
+        #      speed = 1.2
+        speed_max = 4
+        speed_min = 1.5
+        speed = speed_max - (speed_max - speed_min) * (abs_angle / 0.4)
+        speed = float(np.clip(speed, speed_min, speed_max))
+
         drive_msg.drive.steering_angle = steering_angle
         drive_msg.drive.speed = speed
         self.publisher.publish(drive_msg)
@@ -92,7 +113,7 @@ class PurePursuit(Node):
         marker.scale.y = 0.3
         marker.scale.z = 0.3
         marker.color.a = 1.0
-        marker.color.r = 1.0 
+        marker.color.r = 1.0
         self.marker_pub.publish(marker)
 
     def transform_to_vehicle_frame(self, current_pose, goal_point):
@@ -157,10 +178,10 @@ class PurePursuit(Node):
         raw_marker.ns = "raw_points"
         raw_marker.id = 1
         raw_marker.type = Marker.SPHERE_LIST
-        raw_marker.scale.x = 0.15 
+        raw_marker.scale.x = 0.15
         raw_marker.scale.y = 0.15
         raw_marker.scale.z = 0.15
-        raw_marker.color.r = 1.0  
+        raw_marker.color.r = 1.0
         raw_marker.color.a = 1.0
         for p in self.raw_waypoints:
             raw_marker.points.append(Point(x=float(p[0]), y=float(p[1]), z=0.0))
@@ -205,7 +226,7 @@ if __name__ == '__main__':
 
 #         waypoint_file = os.path.expanduser(
 #             '~/f1tenth_ws/src/pure_pursuit/waypoints/path_race2.csv')
-        
+
 #         self.waypoints = []
 #         with open(waypoint_file, 'r') as f:
 #             reader = csv.reader(f)

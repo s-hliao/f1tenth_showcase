@@ -44,7 +44,7 @@ class RRT(Node):
         super().__init__('rrt_node')
  
         # RRT parameters
-        self.MAX_ITER = 1000
+        self.MAX_ITER = 2000
         self.STEER_RANGE = 0.5
         self.GOAL_THRESHOLD = 2.0
         self.GOAL_BIAS = 0.30          # 10% goal sampling
