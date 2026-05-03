@@ -15,7 +15,7 @@ class PurePursuit(Node):
     def __init__(self):
         super().__init__("pure_pursuit_node")
         print(os.getcwd())
-        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn_2.csv")
+        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn_3.csv")
 
         self.subscription = self.create_subscription(
             Odometry, "/pf/pose/odom", self.pose_callback, 10
@@ -93,7 +93,7 @@ class PurePursuit(Node):
         #      speed = 1.0
         # elif abs_angle < 20:
         #      speed = 1.2
-        speed_max = 4
+        speed_max = 5
         speed_min = 1.5
         speed = speed_max - (speed_max - speed_min) * (abs_angle / 0.4)
         speed = float(np.clip(speed, speed_min, speed_max))
@@ -186,7 +186,7 @@ class PurePursuit(Node):
         for p in self.raw_waypoints:
             raw_marker.points.append(Point(x=float(p[0]), y=float(p[1]), z=0.0))
         self.marker_pub.publish(raw_marker)
-
+    
 
 def main(args=None):
     rclpy.init(args=args)
