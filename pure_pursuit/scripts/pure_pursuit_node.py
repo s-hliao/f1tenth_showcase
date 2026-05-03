@@ -15,10 +15,10 @@ class PurePursuit(Node):
     def __init__(self):
         super().__init__("pure_pursuit_node")
         print(os.getcwd())
-        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn_3.csv")
+        self.waypoints = self.load_waypoints("/home/team10/f1tenth_ws/src/pure_pursuit/waypoints/path_racePenn_2.csv")
 
         self.subscription = self.create_subscription(
-            PoseStamped, "/pf/viz/inferred_pose", self.pose_callback, 10
+            Odometry, "/pf/pose/odom", self.pose_callback, 10
         )
         self.marker_pub = self.create_publisher(Marker, "/visualization_marker", 10)
         self.publisher = self.create_publisher(AckermannDriveStamped, "/drive", 10)
@@ -48,7 +48,7 @@ class PurePursuit(Node):
         return np.vstack((x_fine, y_fine)).T.tolist()
 
     def pose_callback(self, pose_msg):
-        current_pose = pose_msg.pose
+        current_pose = pose_msg.pose.pose
 
         # TODO: find the current waypoint to track using methods mentioned in lecture
         goal_point = self.get_lookahead_point(current_pose)
