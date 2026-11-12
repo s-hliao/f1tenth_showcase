@@ -36,9 +36,28 @@ def _setup(context):
                         f'relay to net domain {env["SHOWCASE_NET_DOMAIN"]}')]
 
     dr = get('mode') == 'dr'          # dead reckoning: no particle filter, EKF integrates wheel speed + gyro
-    if dr:
-        acts.append(LogInfo(msg='[showcase] DEAD RECKONING: pose starts at (0, 0) facing +x where the car stands '
-                                'now. Keep it still for the gyro calibration (3 s).'))
+    on = _truthy
+    parts = [p for p, f in (('f1tenth_stack', on(get('bringup'))),
+                            ('particle_filter', on(get('localize')) and not dr)) if f]
+    est = ('dead-reckoning EKF (wheel speed + gyro)' if dr else
+           f"EKF ({get('ekf_source')} + IMU)") if on(get('ekf')) else 'no EKF'
+    print('\n'.join([
+        '',
+        f'================================ SHOWCASE {car} ================================',
+        ('  MODE      DEAD RECKONING: the pose starts at (0, 0) facing +x WHERE THE CAR STANDS NOW.\n'
+         '            Keep the car STILL for ~3 s (gyro bias calibration). Relaunch to reset the origin.'
+         if dr else '  MODE      particle filter localization (map frame)'),
+        f"  STARTING  {', '.join(parts + [est, 'drive_gate'] + (['fleet_relay'] if on(get('relay')) else []))}",
+        f"  NETWORK   driving stack on loopback DDS domain {env['SHOWCASE_LOCAL_DOMAIN']} (unreachable from Wi-Fi);",
+        f"            fleet_relay mirrors it to Wi-Fi domain {env['SHOWCASE_NET_DOMAIN']} as /{car}/* for the "
+        f"ground station.",
+        '            Losing Wi-Fi / the laptop changes nothing on the car.',
+        '  GATE      boots STOPPED: the motor gets zero until a START (lqr terminal "s", carctl, or ground station).',
+        f"            speed control only (current/duty modes blocked); STOP ramps down at {get('stop_decel')} m/s^2;",
+        '            controller silent for 0.2 s while running -> stop.',
+        '  NEXT      T2:  ros2 run showcase_fleet lqr track:=<track> line:=<raceline.csv>' +
+        (' pose:=dr' if dr else ''),
+        '=' * 80, ''], ), flush=True)
     acts.append(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(get_package_share_directory('showcase_state_estimation'),
                                                    'launch', 'bringup_launch.py')),
