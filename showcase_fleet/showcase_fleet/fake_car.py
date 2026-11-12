@@ -54,7 +54,7 @@ class FakeCar(Node):
         self.own_ekf = bool(g('ekf'))
 
         self.raw_pub = self.create_publisher(AckermannDriveStamped, C.DRIVE_RAW_TOPIC, 1)
-        self.odom_pub = self.create_publisher(Odometry, '/odometry/filtered', 1)
+        self.odom_pub = self.create_publisher(Odometry, '/showcase/odometry', 1)
         self.pf_pub = self.create_publisher(Odometry, '/pf/pose/odom', 1)
         self.wheel_pub = self.create_publisher(Odometry, '/odom', 1)            # VESC wheel odometry (rear axle)
         self.imu_pub = self.create_publisher(Imu, '/sensors/imu/raw', 1)        # VESC IMU: gyro deg/s, accel g

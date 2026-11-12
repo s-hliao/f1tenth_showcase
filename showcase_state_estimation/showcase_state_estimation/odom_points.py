@@ -3,7 +3,7 @@
 
 Dead reckoning estimates the rear axle (base_link). Downstream expects other points:
     /dr/pose/odom      laser point (+0.26 m): what the LQR tracks (its REF_X), same point the particle filter gives
-    /odometry/filtered cg (+0.15 m): what the relay, ground station and LLA estimator use in PF mode
+    /showcase/odometry cg (+0.15 m): what the relay, ground station and LLA estimator use in PF mode
 For a point at +d along the heading: p = p_axle + d (cos psi, sin psi), v_body = (vx, vy + d * r).
 """
 import copy
@@ -18,7 +18,7 @@ class OdomPoints(Node):
     def __init__(self):
         super().__init__('odom_points')
         self.declare_parameter('input', '/odometry/dr_base')
-        self.declare_parameter('outputs', ['/dr/pose/odom', '/odometry/filtered'])
+        self.declare_parameter('outputs', ['/dr/pose/odom', '/showcase/odometry'])
         self.declare_parameter('offsets', [0.26, 0.15])
         self.declare_parameter('frames', ['laser', 'cg'])
         outs = list(self.get_parameter('outputs').value)

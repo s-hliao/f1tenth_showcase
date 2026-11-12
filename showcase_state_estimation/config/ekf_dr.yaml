@@ -2,7 +2,7 @@
 # Used to drive a new track before it has a map: the car starts at (0, 0) facing +x (EKF starts at the origin).
 # The pose is the REAR AXLE (base_link), where the no-slip constraint vy = 0 holds; odom_points then publishes the
 # laser point (what the LQR tracks, REF_X 0.26) and the cg (relay / LLA), so nothing downstream changes.
-ekf_filter_node:
+showcase_ekf:
   ros__parameters:
     frequency: 40.0
     two_d_mode: true

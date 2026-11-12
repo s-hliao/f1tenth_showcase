@@ -3,7 +3,7 @@
     f1tenth_system  f1tenth_stack/launch/bringup_launch.py   VESC driver, lidar, ackermann_mux, joy
     particle_filter particle_filter/launch/localize_launch.py -> /pf/pose/odom
     imu_zupt_prep   /sensors/imu/raw + /odom                  -> /sensors/imu/data, /zupt
-    ekf_node        PF pose + IMU + ZUPT                      -> /odometry/filtered
+    ekf_node        PF pose + IMU + ZUPT                      -> /showcase/odometry
 
     ros2 launch showcase_state_estimation bringup_launch.py
     ros2 launch showcase_state_estimation bringup_launch.py localize:=false source:=mocap mocap_topic:=/car1/pose

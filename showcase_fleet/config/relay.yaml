@@ -6,7 +6,7 @@
 #   - {local: /obstacles, type: visualization_msgs/msg/MarkerArray, name: obstacles, max_hz: 10}
 # A row whose message package is missing on a car is skipped with a warning.
 up:
-  - {local: /odometry/filtered, type: nav_msgs/msg/Odometry, name: odom}            # EKF: pose + vx, vy, yaw rate
+  - {local: /showcase/odometry, type: nav_msgs/msg/Odometry, name: odom}            # showcase EKF: pose + vx, vy, yaw rate
   - {local: /sensors/core, type: vesc_msgs/msg/VescStateStamped, name: vesc, pack: vesc}   # motor current, erpm
   - {local: /drive, type: ackermann_msgs/msg/AckermannDriveStamped, name: drive}    # gated, i.e. APPLIED, command
   - {local: /pf/pose/odom, type: nav_msgs/msg/Odometry, name: pf_odom, max_hz: 20}  # raw PF pose (fallback / debug)

@@ -94,9 +94,13 @@ class DriveGate(Node):
 
     # ---- controller pass-through ------------------------------------------------------------------------------
     def on_drive(self, msg):
+        # SPEED CONTROL ONLY: the LLA-patched ackermann_to_vesc (dl-car) switches to duty-cycle (jerk == 1) or raw
+        # motor-current (jerk == 2) mode with `acceleration` as the command. Never let that through.
+        msg.drive.jerk = 0.0
+        msg.drive.acceleration = 0.0
         self.last_raw, self.last_raw_t = msg, time.monotonic()
         if self.state == RUNNING:
-            self.drive_pub.publish(msg)          # unchanged, same cadence as the controller
+            self.drive_pub.publish(msg)          # speed + steering, same cadence as the controller
 
     def on_brake(self, msg):
         if self.state == RUNNING:

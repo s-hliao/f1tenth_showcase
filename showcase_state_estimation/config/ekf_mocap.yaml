@@ -1,7 +1,7 @@
 # Ported from lla_drive_ws/src/llampc/config/mocap.yaml (mocap input).
-# Output: /odometry/filtered (x, y, yaw, vx, vy, yaw rate at the cg frame), consumed by showcase_fleet's relay
+# Output: /showcase/odometry (x, y, yaw, vx, vy, yaw rate at the cg frame), consumed by showcase_fleet's relay
 # and by the laptop LLA estimator. The LQR (frenet_bv3) does NOT use it: it reads /pf/pose/odom directly.
-ekf_filter_node:
+showcase_ekf:
   ros__parameters:
     frequency: 40.0
     two_d_mode: true          # Essential for ground vehicles (locks Z, Roll, Pitch to 0)

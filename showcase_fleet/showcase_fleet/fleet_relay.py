@@ -1,7 +1,7 @@
 """fleet_relay: the car's ONLY bridge between its loopback driving stack and the Wi-Fi.
 
     LOCAL domain (loopback)                         NET domain (Wi-Fi)
-    /odometry/filtered, /sensors/core, /drive ...  ->  /<car>/odom, /<car>/vesc, /<car>/drive ...  (best effort)
+    /showcase/odometry, /sensors/core, /drive ...  ->  /<car>/odom, /<car>/vesc, /<car>/drive ...  (best effort)
     /showcase/state                                ->  /<car>/state  (re-sent at heartbeat_hz)
     /showcase/cmd   <-  "start:ground"/"stop:ground" <- /<car>/cmd   (only exact start/stop verbs pass)
 

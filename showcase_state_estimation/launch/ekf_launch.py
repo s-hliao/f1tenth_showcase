@@ -4,10 +4,10 @@
     ros2 launch showcase_state_estimation ekf_launch.py source:=dr       # dead reckoning (no map yet)
     ros2 launch showcase_state_estimation ekf_launch.py source:=mocap mocap_topic:=/car1/pose
 
-source:=pf     /pf/pose/odom + /sensors/imu/data + /zupt -> /odometry/filtered (cg)          [llampc's ekf.yaml]
+source:=pf     /pf/pose/odom + /sensors/imu/data + /zupt -> /showcase/odometry (cg)          [llampc's ekf.yaml]
 source:=dr     /odom wheel speed + gyro yaw rate (+ /zupt), integrated from (0, 0, 0) at start, in the odom frame:
                EKF (rear axle) -> /odometry/dr_base -> odom_points -> /dr/pose/odom (laser point, for the LQR)
-                                                                   -> /odometry/filtered (cg, relay / LLA)
+                                                                   -> /showcase/odometry (cg, relay / LLA)
                The gyro bias is measured during the first bias_calib_s seconds at standstill: keep the car still.
 source:=mocap  optitrack_node (/<rigid body>/pose -> /optitrack/odom) instead of the PF          [llampc's mocap.yaml]
 
@@ -47,16 +47,18 @@ def _setup(context):
     if source == 'mocap':
         acts.append(Node(package='showcase_state_estimation', executable='optitrack_node', name='optitrack_node',
                          output='screen', parameters=[{'mocap_topic': get('mocap_topic')}]))
-    remaps = [('/set_pose', '/initialpose')]
+    # own node name and output topic: a car's own bringup may already run robot_localization (team10: imu_relay +
+    # ekf_filter_node -> /odometry/filtered + odom->base_link TF); both must coexist untouched
+    remaps = [('/set_pose', '/initialpose'),
+              ('/odometry/filtered', '/odometry/dr_base' if dr else '/showcase/odometry')]
     if dr:
-        remaps.append(('/odometry/filtered', '/odometry/dr_base'))
         acts.append(Node(package='showcase_state_estimation', executable='odom_points', name='odom_points',
                          output='screen',
                          parameters=[{'input': '/odometry/dr_base',
-                                      'outputs': ['/dr/pose/odom', '/odometry/filtered'],
+                                      'outputs': ['/dr/pose/odom', '/showcase/odometry'],
                                       'offsets': [float(get('laser_x')), float(get('cg_x'))],
                                       'frames': ['laser', 'cg']}]))
-    acts.append(Node(package='robot_localization', executable='ekf_node', name='ekf_filter_node', output='screen',
+    acts.append(Node(package='robot_localization', executable='ekf_node', name='showcase_ekf', output='screen',
                      parameters=[f'{share}/config/{CONFIGS[source]}'], remappings=remaps))
     return acts
 
