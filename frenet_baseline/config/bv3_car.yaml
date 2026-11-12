@@ -8,10 +8,10 @@ bv3:
     # Raceline = ROOT/NAME/RACELINE. MAP = ROOT/NAME/MAP. Any entry that starts with / or ~ is used as-is.
     # MAP is only a sanity check (raceline inside the map?). The particle filter's map is set in ITS launch.
     track:
-      ROOT: "~/f1tenth_showcase/src/frenet_baseline/waypoints"
+      ROOT: "~/f1tenth_ws/src/frenet_baseline/waypoints"
       NAME: "venue_ccw"                  # venue_ccw | venue_cw | venue_ccw_ay59 | venue_cw_ay59
       RACELINE: "raceline_stable.csv"    # raceline_stable | raceline_fast | raceline_optimal | centerline
-      MAP: "~/f1tenth_showcase/src/frenet_baseline/maps/racetrack_map.yaml"
+      MAP: "~/f1tenth_ws/src/frenet_baseline/maps/racetrack_map.yaml"
 
     pose_topic: "/pf/pose/odom"
     odom_topic: ""                       # '' = speed from the pose message
@@ -26,6 +26,32 @@ bv3:
       RANGE_MIN: 0.30
       RANGE_MAX: 10.0
       STRIDE: 1
+
+    avoid:                               # [3] barrier-state (BaS) obstacle avoidance
+      ENABLE: false                      # false = bv3 exactly as without avoidance (scan not used)
+      CAR_HALF_WIDTH: 0.15
+      CAR_FRONT: 0.414                   # pose point -> front bumper (+ steering-delay margin) [m]
+      CAR_REAR: 0.40
+      BAS_MARGIN: 0.15                   # clearance [m]; 0.10 in the car BaS demo, 0.15 halved sim crashes in narrow corners
+      H_ACT_OBS: 4.0                     # barrier switches on below this ellipse level (~4 m out)
+      T_LOOK: 0.45                       # obstacle ellipse stretched ahead by T_LOOK * v [s]
+      K_B_OBS: 3.0                       # how hard d_ref is pushed
+      K_DB_OBS: 0.10
+      K_RELAX: 1.5                       # return to the line [1/s]
+      DREF_RATE_MAX: 3.0                 # [m/s]
+      PSI_REF_TAU: 0.10                  # smoothing of the shifted path's heading [s]
+      PSI_REF_MAX: 0.30                  # [rad]
+      K_BV: 0.8                          # slow-down while avoiding
+      K_BV_RETURN: 0.3
+      V_BAS_MIN: 1.5                     # lowest speed while avoiding [m/s]
+      LASER_X: 0.0                       # laser ahead of the pose point [m] (car: pose IS the laser)
+      RANGE_MIN: 0.30                    # ignores the car's own returns
+      OBS_RANGE: 6.0                     # detection range [m]
+      OBS_PERSIST: 2                     # scans in a row to trust an obstacle
+      OBS_CLEAR: 4                       # empty scans to drop it
+      OBS_BIRTH_RANGE: 1.5               # new obstacles must first be seen farther than this [m]
+      OBS_EDGE_JUMP: 0.3                 # obstacle must stand out from its background [m]
+      OBS_EDGE_SIDES: 2                  # 1 if obstacles may touch a wall (wall-hugging racelines)
 
     pose:                                # [2]
       POSE_TO_REAR_AXLE_M: 0.0           # 0 = track the laser point (LQR REF_X accounts for it)

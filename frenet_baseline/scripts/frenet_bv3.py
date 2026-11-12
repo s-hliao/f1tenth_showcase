@@ -9,13 +9,13 @@ input and output, so it can later move into its own package unchanged:
     [0] PARAMETERS     one group per stage, all loaded from the YAML (track block first)
     [1] SCAN PREP      /scan -> crop + downsample (pass-through slot; nothing downstream uses it yet)
     [2] POSE -> STATE  pose message -> State (s, d, e_psi, kappa, v) on the active path
-    [4] PLANNER        path file -> Reference (d_ref, curvature preview, speed target)
+    [3] AVOIDANCE      scan + State -> d_ref, speed scale (barrier states, BaS). avoid.ENABLE: false = bv3 unchanged
+    [4] PLANNER        path file (+ [3]) -> Reference (d_ref, curvature preview, speed target)
     [5] OPTIMIZER      State + Reference -> Command; controller chosen by name:
                           LQR           feedforward - K(v)*[d - d_ref, e_psi], K from a single-track model
                           PURE_PURSUIT  bv2 race law (bit-identical to bv2)
                           PD            bv2 Frenet PD law (bit-identical to bv2)
     [6] NODE           ROS inputs/outputs, telemetry, RViz
-    ([3] PERCEPTION is left out on purpose; obstacle avoidance plugs in between [2] and [4] later.)
 
 SINGLE-TRACK (BICYCLE) MODEL: injected in two places, both in [5], both marked >>> SINGLE-TRACK MODEL:
     (a) LqrOptimizer._error_model()  linearized error dynamics -> A, B -> Riccati -> gain table K(v)
@@ -60,6 +60,54 @@ class ScanParams:
     RANGE_MIN: float = 0.30              # drop closer returns (the car itself) [m]
     RANGE_MAX: float = 10.0              # drop farther returns [m]
     STRIDE: int = 1                      # keep every n-th beam
+
+
+@dataclass
+class AvoidParams:
+    """[3] Barrier-state (BaS) obstacle avoidance. Defaults = the BaS demo config tested on the car (bas_demo.yaml)."""
+    ENABLE: bool = False                 # false: no scan use, d_ref = 0, bit-identical to bv3 without avoidance
+    # car footprint, measured from the pose point (car: /pf/pose/odom = laser point)
+    CAR_HALF_WIDTH: float = 0.15
+    CAR_FRONT: float = 0.414             # pose point -> front bumper, plus margin for the steering delay [m]
+    CAR_REAR: float = 0.40               # pose point -> rear bumper [m]
+    BAS_MARGIN: float = 0.10             # extra clearance around the car [m]
+    # barrier
+    H_ACT_OBS: float = 4.0               # barrier switches on when the ellipse level h drops below this (~4 m out)
+    T_LOOK: float = 0.45                 # obstacle ellipse stretched ahead by T_LOOK * v [s]
+    K_B_OBS: float = 3.0                 # barrier-state gain (how hard d_ref is pushed)
+    K_DB_OBS: float = 0.10               # gain on the barrier's rate
+    K_RELAX: float = 1.5                 # d_ref decays back to the line when clear [1/s]
+    DREF_RATE_MAX: float = 3.0           # max sideways shift rate of the reference [m/s]
+    DREF_EPS: float = 0.005              # snap d_ref to exactly 0 when inactive and below this [m]
+    PSI_REF_TAU: float = 0.10            # low-pass on the d_ref rate used for the reference heading [s]
+    PSI_REF_MAX: float = 0.30            # cap on the reference heading relative to the path [rad]
+    H_MIN: float = 1e-3
+    B_MAX: float = 200.0
+    ZDOT_MAX: float = 500.0
+    DENOM_MIN: float = 0.1               # floor for (1 - kappa * d)
+    # speed while avoiding
+    K_BV: float = 0.8                    # speed scale = 1 / (1 + K_BV * sum B~ ahead + K_BV_RETURN * |d_ref|)
+    K_BV_RETURN: float = 0.3
+    V_BAS_MIN: float = 1.5               # never slower than this while avoiding [m/s]
+    # LiDAR -> obstacles
+    LASER_X: float = 0.0                 # laser ahead of the pose point [m] (car: 0, the pose IS the laser point)
+    LASER_Y: float = 0.0
+    SCAN_STRIDE: int = 2                 # use every n-th beam
+    SCAN_FOV_DEG: float = 200.0          # beams within +-FOV/2 of straight ahead
+    RANGE_MIN: float = 0.30              # drops the car's own returns (0.13-0.19 m seen in the bags) [m]
+    OBS_RANGE: float = 6.0               # detection distance [m]
+    OBS_BEHIND: float = 0.6              # keep obstacles until this far behind [m]
+    WALL_GATE: float = 0.15              # points closer than this to a wall are wall, not obstacle [m]
+    CLUSTER_GAP: float = 0.25            # beams farther apart than this start a new cluster [m]
+    MIN_PTS: int = 3                     # points per cluster
+    OBS_R_MIN: float = 0.15              # minimum obstacle half-size [m]
+    OBS_PERSIST: int = 2                 # scans in a row before obstacles are trusted
+    OBS_CLEAR: int = 4                   # empty scans before obstacles are dropped
+    OBS_BIRTH_RANGE: float = 1.5         # a NEW obstacle must first be seen farther than this [m]; 0 = off
+    OBS_MATCH_DS: float = 1.0            # same obstacle if within this along the path [m] ...
+    OBS_MATCH_DD: float = 0.5            # ... and this sideways [m]
+    OBS_EDGE_JUMP: float = 0.3           # beams beside a cluster must read this much farther (stands in front) [m]; 0 = off
+    OBS_EDGE_SIDES: int = 2              # 2 = both sides, 1 = one side is enough (box touching a wall)
 
 
 @dataclass
@@ -275,6 +323,227 @@ class FrenetTracker:
 
 
 # ============================================================
+# [3] AVOIDANCE: BARRIER STATES (BaS)
+# ============================================================
+
+class BarrierAvoidance:
+    """LiDAR obstacles -> barrier state -> d_ref (sideways shift of the reference) + speed scale.
+
+    The proven BaS layer (bv1 BaS demo on the car, bv2 sim tests), kept to its reliable core:
+        [3a] scan -> obstacles in (s, d): beams near the walls dropped, neighbouring beams clustered,
+             RANGE_MIN (own body), BIRTH (new obstacles must appear far away), EDGE (must stand in front of
+             its background), persistence (OBS_PERSIST in, OBS_CLEAR out)
+        [3b] one ellipse barrier per obstacle, stretched ahead by T_LOOK * v, on the PLANNED offset d_ref:
+             h = (ds/a)^2 + ((d_ref - d_obs)/b)^2 - 1,  B~ = 1/h - 1/H_ACT_OBS  (0 when far)
+        [3c] d_ref_dot = sum side * max(0, K_B * B~ + K_DB * dB/dt) - K_RELAX * d_ref, clamped inside the walls
+    Pass side = larger gap to the wall, chosen once per obstacle and locked until it leaves the range.
+    No wall barriers (the tracking stays on the line; the d_ref clamp keeps the plan inside the walls).
+    Cost: O(K) per cycle (K = obstacles); detection O(M*W) numpy once per NEW scan (M beams, W window points)."""
+
+    def __init__(self, path: 'Path', p: AvoidParams, log=print):
+        self.p, self.path = p, path
+        x, y = path.np_x, path.np_y
+        dx, dy = np.roll(x, -1) - x, np.roll(y, -1) - y
+        self.psi = np.arctan2(dy, dx)                               # segment headings (same indices as [2])
+        self.cos, self.sin = np.cos(self.psi), np.sin(self.psi)
+        self.wl, self.wr = path.np_wl, path.np_wr
+        n_ahead = int(math.ceil((p.OBS_RANGE + p.LASER_X) / path.ds)) + 1
+        self._win = np.arange(-int(math.ceil(p.OBS_BEHIND / path.ds)) - 2, n_ahead)
+        self.scan = None
+        self.scan_new = False
+        self._beams = None
+        self.obstacles = []                                         # (s, d, r_s, r_d, x, y, w_left, w_right)
+        self._last_found = []
+        self._hits = self._misses = 0
+        self.sides = []                                             # [s, side] per obstacle in range: +1 left, -1 right
+        self.d_ref = self.d_ref_rate = self.rate_f = 0.0
+        self.psi_ref = 0.0                                          # heading of the shifted reference (LQR / PD use it)
+        self.speed_scale = 1.0
+        self.active = False
+        if not path.has_widths:
+            log(f'WARN avoidance: path file has no width columns, walls assumed at +-{path.w_left[0]:.2f} m. '
+                'Wall points may be taken for obstacles: use a raceline with w_left/w_right.')
+        log(f'Avoidance ON: obstacles within {p.OBS_RANGE} m, margin {p.BAS_MARGIN} m, min speed {p.V_BAS_MIN} m/s')
+
+    def set_scan(self, ranges, angle_min: float, angle_inc: float):
+        """Store only; processed in the next control cycle."""
+        self.scan = (ranges, angle_min, angle_inc)
+        self.scan_new = True
+
+    def step(self, st: State, dt: float):
+        """One cycle. Uses the pose point (st.x, st.y) and the Frenet state of [2]. Returns (d_ref, speed_scale)."""
+        if self.scan_new:
+            self.detect(st.x, st.y, st.yaw, st.seg)
+            self.scan_new = False
+        push, bt_ahead, active = self.barriers(st)
+        self.update_d_ref(push, bt_ahead, active, dt, st.seg, st.v)
+        return self.d_ref, self.speed_scale
+
+    # ---- [3a] LiDAR -> obstacles in (s, d), once per NEW scan ----
+
+    def detect(self, x, y, yaw, seg):
+        p, L = self.p, self.path
+        ranges, a0, da = self.scan
+        r_all = np.asarray(ranges, dtype=float)
+        key = (len(r_all), a0, da)
+        if self._beams is None or self._beams[0] != key:            # beam angles cached per scan layout
+            ang = a0 + da * np.arange(len(r_all))
+            idx = np.where(np.abs(ang) <= math.radians(p.SCAN_FOV_DEG) / 2)[0][::max(1, p.SCAN_STRIDE)]
+            self._beams = (key, idx, np.cos(ang[idx]), np.sin(ang[idx]))
+        _, idx, ca, sa = self._beams
+        r = r_all[idx]
+        keep = np.isfinite(r) & (r > p.RANGE_MIN) & (r < p.OBS_RANGE)
+        if not keep.any():
+            return self._confirm([])
+        r, ca, sa, bi = r[keep], ca[keep], sa[keep], idx[keep]
+
+        lx, ly = p.LASER_X + r * ca, p.LASER_Y + r * sa              # laser -> pose-point frame
+        c, sn = math.cos(yaw), math.sin(yaw)
+        px, py = x + c * lx - sn * ly, y + sn * lx + c * ly            # -> map
+
+        win = (seg + self._win) % L.n                                  # path points near and ahead of the car
+        d2 = (px[:, None] - L.np_x[win][None, :]) ** 2 + (py[:, None] - L.np_y[win][None, :]) ** 2
+        k = win[np.argmin(d2, axis=1)]
+        ex, ey = px - L.np_x[k], py - L.np_y[k]
+        ps = L.np_s[k] + ex * self.cos[k] + ey * self.sin[k]
+        pd = -ex * self.sin[k] + ey * self.cos[k]
+
+        inside = (pd < self.wl[k] - p.WALL_GATE) & (pd > -self.wr[k] + p.WALL_GATE)
+        if inside.sum() < p.MIN_PTS:
+            return self._confirm([])
+        px, py, ps, pd, rr, bi = px[inside], py[inside], ps[inside], pd[inside], r[inside], bi[inside]
+
+        jump = np.hypot(np.diff(px), np.diff(py)) > p.CLUSTER_GAP
+        cuts = np.concatenate([[0], np.where(jump)[0] + 1, [len(px)]])
+        found = []
+        for a, b in zip(cuts[:-1], cuts[1:]):
+            if b - a < p.MIN_PTS:
+                continue
+            cs, cd = ps[a:b], pd[a:b]
+            s_c, d_c = float(np.mean(cs)) % L.length, float(np.mean(cd))
+            r_s = max(p.OBS_R_MIN, 0.5 * float(cs.max() - cs.min()))
+            r_d = max(p.OBS_R_MIN, 0.5 * float(cd.max() - cd.min()))
+            if p.OBS_BIRTH_RANGE > 0.0 and float(rr[a:b].min()) < p.OBS_BIRTH_RANGE \
+                    and not self._continues(s_c, d_c):
+                continue                                               # BIRTH: appeared too close
+            if p.OBS_EDGE_JUMP > 0.0 and \
+                    self._edge_jump(r_all, int(bi[a]), float(rr[a]), -1) + \
+                    self._edge_jump(r_all, int(bi[b - 1]), float(rr[b - 1]), 1) < p.OBS_EDGE_SIDES:
+                continue                                               # EDGE: continuous with its background
+            i = L.index_at(s_c)
+            psi = float(self.psi[i])
+            found.append((s_c, d_c, r_s, r_d, L.x[i] - d_c * math.sin(psi), L.y[i] + d_c * math.cos(psi),
+                          float(self.wl[i]), float(self.wr[i])))
+        self._last_found = found
+        self._confirm(found)
+
+    def _edge_jump(self, r_all, i, r_edge, step):
+        """1 if one of the next 3 valid beams past the cluster edge reads farther than r_edge + OBS_EDGE_JUMP."""
+        p, n = self.p, len(r_all)
+        j, seen = i, 0
+        while seen < 3:
+            j += step * max(1, p.SCAN_STRIDE)
+            if j < 0 or j >= n:
+                return 1
+            rj = r_all[j]
+            if not math.isfinite(rj) or rj - r_edge > p.OBS_EDGE_JUMP:
+                return 1
+            if rj <= p.RANGE_MIN:
+                continue                                               # own body / no data
+            seen += 1
+        return 0
+
+    def _continues(self, s_c, d_c):
+        p, half, length = self.p, 0.5 * self.path.length, self.path.length
+        for ob in self.obstacles + self._last_found:
+            if abs((s_c - ob[0] + half) % length - half) < p.OBS_MATCH_DS and abs(d_c - ob[1]) < p.OBS_MATCH_DD:
+                return True
+        return False
+
+    def _confirm(self, found):
+        p = self.p
+        if not found:
+            self._last_found = []
+            self._misses += 1
+            if self._misses >= p.OBS_CLEAR:
+                self._hits = 0
+                self.obstacles = []
+            return
+        self._hits += 1
+        self._misses = 0
+        if self._hits >= p.OBS_PERSIST:
+            self.obstacles = found
+
+    # ---- [3b] barriers on the PLANNED offset d_ref (the barrier state) ----
+
+    def barriers(self, st: State):
+        p, length = self.p, self.path.length
+        q, q_dot, v = self.d_ref, self.d_ref_rate, st.v
+        s_dot = v * math.cos(st.e_psi) / max(1.0 - st.kappa * st.d, p.DENOM_MIN)
+        push, bt_ahead, active = 0.0, 0.0, False
+        half, sides_now = 0.5 * length, []
+        for (s_j, d_j, r_s, r_d, _, _, wl_j, wr_j) in self.obstacles:
+            ds = (st.s - s_j + half) % length - half                    # < 0: obstacle ahead
+            if ds < -p.OBS_RANGE or ds > p.OBS_BEHIND:
+                continue
+            ent = next((e for e in self.sides if abs((s_j - e[0] + half) % length - half) < p.OBS_MATCH_DS), None)
+            if ent is None:
+                ent = [s_j, 0]
+            ent[0] = s_j
+            if ent not in sides_now:
+                sides_now.append(ent)
+            a = r_s + p.BAS_MARGIN + (p.CAR_FRONT + p.T_LOOK * v if ds < 0.0 else p.CAR_REAR)
+            b = r_d + p.CAR_HALF_WIDTH + p.BAS_MARGIN
+            h = (ds / a) ** 2 + ((q - d_j) / b) ** 2 - 1.0
+            h_dot = 2.0 * ds / (a * a) * s_dot + 2.0 * (q - d_j) / (b * b) * q_dot
+            bt, zdot = self._shifted_barrier(h, h_dot)
+            if bt <= 0.0:
+                continue
+            if ent[1] == 0:                                            # pass side: larger gap, chosen once
+                ent[1] = 1 if wl_j - (d_j + r_d) >= (d_j - r_d) + wr_j else -1
+            push += ent[1] * max(0.0, p.K_B_OBS * bt + p.K_DB_OBS * zdot)
+            active = True
+            if ds < 0.0:
+                bt_ahead += bt
+        self.sides = sides_now                                         # a side is forgotten when its obstacle leaves the range
+        return push, bt_ahead, active
+
+    def _shifted_barrier(self, h, h_dot):
+        p = self.p
+        if h >= p.H_ACT_OBS:
+            return 0.0, 0.0
+        hc = max(h, p.H_MIN)
+        bt = min(1.0 / hc - 1.0 / p.H_ACT_OBS, p.B_MAX)
+        if bt >= p.B_MAX or h <= p.H_MIN:
+            return bt, 0.0
+        return bt, max(-p.ZDOT_MAX, min(p.ZDOT_MAX, -h_dot / (hc * hc)))
+
+    # ---- [3c] barrier state -> d_ref, speed scale ----
+
+    def update_d_ref(self, push, bt_ahead, active, dt, seg, v):
+        p, L = self.p, self.path
+        # >>> TELEMETRY  d_ref, avoid_active, n_obstacles
+        # >>> METRIC     min clearance to obstacles, avoidance time per lap, lap time with vs without obstacles
+        rate = max(-p.DREF_RATE_MAX, min(p.DREF_RATE_MAX, push - p.K_RELAX * self.d_ref))
+        d_ref = self.d_ref + rate * dt
+        # walls: narrowest corridor over the car's length plus the look-ahead (the track can narrow ahead)
+        i0 = seg - int(p.CAR_REAR * L.inv_ds)
+        i1 = seg + int((p.CAR_FRONT + p.T_LOOK * max(v, 0.0)) * L.inv_ds) + 1
+        idx = [i % L.n for i in range(i0, i1 + 1)]
+        m = p.CAR_HALF_WIDTH + p.BAS_MARGIN
+        hi = min(L.w_left[i] for i in idx) - m
+        lo = -min(L.w_right[i] for i in idx) + m
+        d_ref = min(hi, max(lo, d_ref)) if lo < hi else 0.0
+        rate = (d_ref - self.d_ref) / dt if dt > 0.0 else 0.0       # actual rate after the clamp (0 while held at a wall)
+        if not active and abs(d_ref) < p.DREF_EPS:
+            d_ref, rate = 0.0, 0.0
+        self.d_ref, self.d_ref_rate, self.active = float(d_ref), float(rate), active
+        self.rate_f += (rate - self.rate_f) * dt / (p.PSI_REF_TAU + dt) if d_ref != 0.0 else -self.rate_f
+        self.psi_ref = max(-p.PSI_REF_MAX, min(p.PSI_REF_MAX, math.atan2(self.rate_f, max(v, 0.5))))
+        self.speed_scale = 1.0 / (1.0 + p.K_BV * bt_ahead + p.K_BV_RETURN * abs(self.d_ref))
+
+
+# ============================================================
 # [4] PLANNER
 # ============================================================
 
@@ -282,6 +551,7 @@ class FrenetTracker:
 class Reference:
     """What the optimizer tracks this cycle. One instance, overwritten every cycle."""
     d_ref: float = 0.0                   # lateral target (0 = on the path) [m]
+    psi_ref: float = 0.0                 # heading of the shifted reference relative to the path (from d_ref rate) [rad]
     kappa_ff: float = 0.0                # path curvature at the preview point [1/m]
     preview_m: float = 0.0
     tx: float = 0.0                      # preview point (RViz)
@@ -328,6 +598,8 @@ class Path:
         self.seg_inv_len2 = (1.0 / np.maximum(seg_len ** 2, 1e-12)).tolist()
         self.w_left, self.w_right = np.asarray(w_left, float).tolist(), np.asarray(w_right, float).tolist()
         self.np_x, self.np_y, self.np_psi = x.copy(), y.copy(), np.asarray(psi, float)
+        self.np_s, self.np_wl, self.np_wr = s.copy(), np.asarray(w_left, float), np.asarray(w_right, float)
+        self.has_widths = cols >= 9 or cols == 4                    # walls known per point (needed by [3])
         log(f'Path {path_file}: {self.n} pts, {self.length:.1f} m, max|kappa| {np.max(np.abs(kappa)):.2f}, '
             f'speed {vx.min():.1f}-{vx.max():.1f} m/s, {src}')
 
@@ -385,6 +657,22 @@ class Path:
         return v
 
 
+def map_image_size(img: str):
+    """(width, height) in pixels from the image header only. PGM (SLAM maps) and PNG (gym maps)."""
+    with open(img, 'rb') as f:
+        head = f.read(24)
+        if head[:8] == b'\x89PNG\r\n\x1a\n':                    # PNG: IHDR width, height (big-endian) at bytes 16-24
+            return int.from_bytes(head[16:20], 'big'), int.from_bytes(head[20:24], 'big')
+        f.seek(0)                                                   # PGM: P5 <w> <h> <max>, '#' comments allowed
+        tok = []
+        while len(tok) < 3:
+            line = f.readline()
+            if not line:
+                raise ValueError(f'unsupported map image {img}')
+            tok += line.split(b'#')[0].split()
+        return int(tok[1]), int(tok[2])
+
+
 def check_map(map_yaml: str, path: Path, log=print):
     """Warn if the raceline leaves the map's extent (wrong map / raceline pair). Reads only the yaml + image header."""
     if not map_yaml:
@@ -396,12 +684,7 @@ def check_map(map_yaml: str, path: Path, log=print):
         import yaml
         meta = yaml.safe_load(open(map_yaml))
         img = meta['image'] if os.path.isabs(meta['image']) else os.path.join(os.path.dirname(map_yaml), meta['image'])
-        with open(img, 'rb') as f:                                  # PGM header: P5 <w> <h> <max>
-            tok = []
-            while len(tok) < 3:
-                line = f.readline().split(b'#')[0].split()
-                tok += line
-        w, h = int(tok[1]), int(tok[2])
+        w, h = map_image_size(img)
         res, ox, oy = float(meta['resolution']), meta['origin'][0], meta['origin'][1]
         inside = ((path.np_x >= ox) & (path.np_x <= ox + w * res) & (path.np_y >= oy) & (path.np_y <= oy + h * res))
         if inside.all():
@@ -417,9 +700,10 @@ class Planner:
         self.path, self.p = path, p
         self.ref = Reference()
 
-    def plan(self, st: State) -> Reference:
+    def plan(self, st: State, avoid: 'BarrierAvoidance' = None) -> Reference:
         p, L, r = self.p, self.path, self.ref
-        r.d_ref = 0.0                                               # avoidance sets this later ([3])
+        r.d_ref = 0.0 if avoid is None else avoid.d_ref             # [3] shifts the target sideways
+        r.psi_ref = 0.0 if avoid is None else avoid.psi_ref
 
         la = max(p.FF_PREVIEW_MIN, p.FF_PREVIEW_T * st.v)
         i, t = L.at(st.s + la)
@@ -434,6 +718,9 @@ class Planner:
         j = L.index_at(st.s + st.v * p.SPEED_PREVIEW_T)
         r.v_ref = L.vx[j] * p.SPEED_SCALE
         r.v_target = max(p.SPEED_MIN, min(r.v_ref, p.SPEED_MAX))
+        if avoid is not None and (avoid.active or avoid.speed_scale < 1.0):
+            floor = avoid.p.V_BAS_MIN if avoid.active else p.SPEED_MIN
+            r.v_target = max(min(floor, r.v_target), r.v_target * avoid.speed_scale)
         r.speed_limited = r.v_target < r.v_ref - 1e-6
         return r
 
@@ -581,6 +868,7 @@ class LqrOptimizer(Optimizer):
         d, e = st.d - ref.d_ref, st.e_psi
         if self.sent is not None:
             d, e = self._predict(d, e, st.s, st.v)
+        e -= ref.psi_ref                                            # track the shifted reference's heading (0 without [3])
         k_d, k_psi = self.gain(st.v)
         return self.feedforward(ref.kappa_ff, st.v) - (k_d * d + k_psi * e)
 
@@ -630,7 +918,7 @@ class FrenetPD(Optimizer):
         v = max(st.v, cp.V_MIN_SCHED)
         kp = cp.KP * (cp.V_REF / v) ** 2
         kd = cp.KD * (cp.V_REF / v)
-        return self.feedforward(ref.kappa_ff, st.v) - (kp * (st.d - ref.d_ref) + kd * st.e_psi)
+        return self.feedforward(ref.kappa_ff, st.v) - (kp * (st.d - ref.d_ref) + kd * (st.e_psi - ref.psi_ref))
 
 
 OPTIMIZERS = {'LQR': LqrOptimizer, 'PURE_PURSUIT': PurePursuit, 'PD': FrenetPD}
@@ -642,17 +930,19 @@ OPTIMIZERS = {'LQR': LqrOptimizer, 'PURE_PURSUIT': PurePursuit, 'PD': FrenetPD}
 
 class Bv3:
     def __init__(self, track: TrackParams, pose_p: PoseParams, plan_p: PlannerParams, opt_p: OptimizerParams,
-                 ctrl_p=None, warmup_cycles: int = 10, log=print):
+                 ctrl_p=None, warmup_cycles: int = 10, log=print, avoid_p: AvoidParams = None):
         line_file, map_file = resolve_track(track)
         cls = OPTIMIZERS[opt_p.TYPE.upper()]
         self.path = Path(line_file, plan_p, log)                    # [4] path, loaded once
         check_map(map_file, self.path, log)
         self.pose = FrenetTracker(self.path, pose_p, log)           # [2]
+        self.avoid = (BarrierAvoidance(self.path, avoid_p, log)
+                      if avoid_p is not None and avoid_p.ENABLE else None)   # [3] None = off
         self.planner = Planner(self.path, plan_p)                   # [4]
         self.opt = cls(opt_p, self.path, ctrl_p if ctrl_p is not None else (cls.Params() if cls.Params else None),
                        log)                                         # [5]
         self.warmup, self.warmup_cycles = 0, warmup_cycles
-        self.t_ms = [0.0, 0.0, 0.0]
+        self.t_ms = [0.0, 0.0, 0.0, 0.0]                           # frenet, avoidance, plan, control
         log(f'Optimizer {cls.__name__} ({opt_p.TYPE}): {self.opt.cp}')
 
     def step(self, x, y, yaw, v, yaw_rate, dt):
@@ -663,14 +953,22 @@ class Bv3:
         t0 = time.perf_counter()
         st = self.pose.update(x, y, yaw, v, yaw_rate)              # [2]
         t1 = time.perf_counter()
-        ref = self.planner.plan(st)                                # [4]
+        if self.avoid is not None:
+            self.avoid.step(st, dt)                                # [3]
         t2 = time.perf_counter()
-        cmd = self.opt.step(st, ref, dt)                           # [5]
+        ref = self.planner.plan(st, self.avoid)                    # [4]
         t3 = time.perf_counter()
-        # >>> TELEMETRY  t_frenet_ms, t_plan_ms, t_control_ms
+        cmd = self.opt.step(st, ref, dt)                           # [5]
+        t4 = time.perf_counter()
+        # >>> TELEMETRY  t_frenet_ms, t_obstacles_ms, t_plan_ms, t_control_ms
         # >>> METRIC     compute budget per stage (rule: total < 0.5 x pose period)
-        self.t_ms[0], self.t_ms[1], self.t_ms[2] = (t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t2) * 1e3
+        self.t_ms[0], self.t_ms[1] = (t1 - t0) * 1e3, (t2 - t1) * 1e3
+        self.t_ms[2], self.t_ms[3] = (t3 - t2) * 1e3, (t4 - t3) * 1e3
         return st, ref, cmd
+
+    def set_scan(self, ranges, angle_min: float, angle_inc: float):
+        if self.avoid is not None:
+            self.avoid.set_scan(ranges, angle_min, angle_inc)
 
 
 # ============================================================
@@ -713,7 +1011,9 @@ if rclpy is not None:
             opt_p = self._group('optimizer', OptimizerParams())
             cls = OPTIMIZERS[opt_p.TYPE.upper()]
             ctrl_p = self._group(cls.NAME, cls.Params()) if cls.Params else None
-            self.core = Bv3(track, pose_p, plan_p, opt_p, ctrl_p, gp('WARMUP_CYCLES', 10), self.get_logger().info)
+            avoid_p = self._group('avoid', AvoidParams())
+            self.core = Bv3(track, pose_p, plan_p, opt_p, ctrl_p, gp('WARMUP_CYCLES', 10), self.get_logger().info,
+                            avoid_p)
             self.scan = ScanPrep(scan_p)
 
             self.v = 0.0
@@ -721,6 +1021,7 @@ if rclpy is not None:
             self.prev_t = None
             self.next_viz = 0.0
             self.cycle = 0
+            self.avoid_prev = False
 
             # ---- outputs ----
             self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 1)
@@ -737,10 +1038,11 @@ if rclpy is not None:
             self.use_pose_twist = not odom_topic
             if odom_topic:
                 self.create_subscription(Odometry, odom_topic, self.odom_callback, sensor_qos)
-            if scan_p.ENABLE:
+            if scan_p.ENABLE or avoid_p.ENABLE:
                 self.create_subscription(LaserScan, scan_topic, self.scan_callback, sensor_qos)
             self.create_subscription(Odometry, pose_topic, self.pose_callback, sensor_qos)
-            self.get_logger().info(f'bv3 ready: track {track.NAME}, pose {pose_topic}, optimizer {opt_p.TYPE}')
+            self.get_logger().info(f'bv3 ready: track {track.NAME}, pose {pose_topic}, optimizer {opt_p.TYPE}, '
+                                   f'avoidance {"ON" if avoid_p.ENABLE else "off"}')
 
         # ---- [0] parameters: top-level values and one group per stage ----
 
@@ -760,7 +1062,10 @@ if rclpy is not None:
             self.v = msg.twist.twist.linear.x
             self.yaw_rate = msg.twist.twist.angular.z
 
-        def scan_callback(self, msg):                               # [1]
+        def scan_callback(self, msg):                               # [1] and [3]
+            self.core.set_scan(msg.ranges, msg.angle_min, msg.angle_increment)   # [3] raw scan, stored only
+            if not self.scan.p.ENABLE:
+                return
             r = self.scan.update(msg.ranges, msg.angle_min, msg.angle_increment)
             if self.scan_pub is not None:
                 out = LaserScan(header=msg.header, angle_min=msg.angle_min, angle_max=msg.angle_max,
@@ -795,6 +1100,11 @@ if rclpy is not None:
             self.drive_pub.publish(drive)
             if out is None:
                 return
+            av = self.core.avoid
+            if av is not None and av.active != self.avoid_prev:     # one log line per avoidance event
+                self.avoid_prev = av.active
+                self.get_logger().info(f'AVOID {"ON" if av.active else "off"}: d_ref {av.d_ref:+.2f} m, '
+                                       f'obstacles {len(av.obstacles)}, s {st.s:.1f} m')
             if cmd.brake_current > 0.0:
                 self.brake_pub.publish(Float64(data=cmd.brake_current))
             if self.viz_on and t_start >= self.next_viz:
@@ -816,11 +1126,12 @@ if rclpy is not None:
             m.x, m.y, m.yaw, m.v, m.yaw_rate = st.x, st.y, st.yaw, st.v, st.yaw_rate
             m.s, m.d, m.e_psi, m.kappa = st.s, st.d, st.e_psi, st.kappa
             m.d_ref, m.v_ref, m.lookahead_m = ref.d_ref, ref.v_ref, ref.preview_m
-            m.n_obstacles, m.avoid_active = 0, False
+            av = self.core.avoid
+            m.n_obstacles = 0 if av is None else min(255, len(av.obstacles))
+            m.avoid_active = False if av is None else bool(av.active)
             m.steer_raw, m.steer_cmd, m.speed_cmd = cmd.steer_raw, cmd.steer, cmd.speed
             m.steer_saturated = cmd.steer_saturated
-            m.t_frenet_ms, m.t_plan_ms, m.t_control_ms = self.core.t_ms
-            m.t_obstacles_ms = 0.0
+            m.t_frenet_ms, m.t_obstacles_ms, m.t_plan_ms, m.t_control_ms = self.core.t_ms
             m.t_total_ms = (time.perf_counter() - t_start) * 1e3
             m.flags = Telemetry.FLAG_SPEED_LIMITED if ref.speed_limited else 0
             self.telem_pub.publish(m)
@@ -856,7 +1167,25 @@ if rclpy is not None:
             text.pose.position.x, text.pose.position.y, text.pose.position.z = st.xr, st.yr, 0.6
             text.text = (f'v {st.v:.2f} cmd {cmd.speed:.2f} m/s | d {st.d:+.2f} m '
                          f'e_psi {math.degrees(st.e_psi):+.0f} deg | steer {cmd.steer:+.2f}')
-            self.viz_pub.publish(MarkerArray(markers=[preview, foot, text]))
+            markers = [preview, foot, text]
+            av = self.core.avoid
+            if av is not None:                                      # [3] obstacles (red) + shifted target (orange)
+                text.text += f'\nd_ref {ref.d_ref:+.2f} m | obstacles {len(av.obstacles)}{" | AVOID" if av.active else ""}'
+                c, sn = math.cos(st.psi_path), math.sin(st.psi_path)
+                target = self._marker(4, Marker.SPHERE, 0.16, (1.0, 0.5, 0.0, 1.0))
+                target.pose.position.x, target.pose.position.y = st.fx - ref.d_ref * sn, st.fy + ref.d_ref * c
+                markers.append(target)
+                for k in range(8):                                  # fixed ids: unused ones are hidden
+                    m = self._marker(10 + k, Marker.CYLINDER, 0.1, (1.0, 0.1, 0.1, 0.7))
+                    if k < len(av.obstacles):
+                        ob = av.obstacles[k]
+                        m.pose.position.x, m.pose.position.y = ob[4], ob[5]
+                        m.scale.x = m.scale.y = 2.0 * max(ob[2], ob[3])
+                        m.scale.z = 0.3
+                    else:
+                        m.action = Marker.DELETE
+                    markers.append(m)
+            self.viz_pub.publish(MarkerArray(markers=markers))
 
 
 def main(args=None):
