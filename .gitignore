@@ -4,3 +4,12 @@
 **/checkpoints
 **/*.png
 **/*.npy
+# per-car dependency clones (distro-specific, live only on each car): keep just the placeholders
+/f1tenth_system/*
+!/f1tenth_system/PLACEHOLDER.md
+/particle_filter/*
+!/particle_filter/PLACEHOLDER.md
+
+# ament_python packages need their resource/<pkg> marker (overrides **/resource above)
+!/showcase_fleet/resource
+!/showcase_state_estimation/resource

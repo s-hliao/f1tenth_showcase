@@ -1,0 +1,15 @@
+# fleet_relay: what each car broadcasts to the ground station, as /<car>/<name> on the NET domain.
+# Every row is best effort, depth 1, car -> laptop only. Nothing in this file can send data INTO the car;
+# the only inbound path is /<car>/cmd (start/stop), which is hard-wired in fleet_relay.py.
+#
+# Add rows for new car-side features (e.g. obstacle avoidance debug topics) here; no code changes needed:
+#   - {local: /obstacles, type: visualization_msgs/msg/MarkerArray, name: obstacles, max_hz: 10}
+# A row whose message package is missing on a car is skipped with a warning.
+up:
+  - {local: /odometry/filtered, type: nav_msgs/msg/Odometry, name: odom}            # EKF: pose + vx, vy, yaw rate
+  - {local: /sensors/core, type: vesc_msgs/msg/VescStateStamped, name: vesc, pack: vesc}   # motor current, erpm
+  - {local: /drive, type: ackermann_msgs/msg/AckermannDriveStamped, name: drive}    # gated, i.e. APPLIED, command
+  - {local: /pf/pose/odom, type: nav_msgs/msg/Odometry, name: pf_odom, max_hz: 20}  # raw PF pose (fallback / debug)
+
+heartbeat_hz: 5.0     # /<car>/state re-send rate; the ground station calls a car LINK LOST after ~1 s of silence
+queue_size: 256       # local -> network buffer; overflow drops samples, never blocks the car

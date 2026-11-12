@@ -1,0 +1,43 @@
+# Dead reckoning (no absolute pose): wheel speed (VESC /odom twist) + IMU yaw rate, integrated in the odom frame.
+# Used to drive a new track before it has a map: the car starts at (0, 0) facing +x (EKF starts at the origin).
+# The pose is the REAR AXLE (base_link), where the no-slip constraint vy = 0 holds; odom_points then publishes the
+# laser point (what the LQR tracks, REF_X 0.26) and the cg (relay / LLA), so nothing downstream changes.
+ekf_filter_node:
+  ros__parameters:
+    frequency: 40.0
+    two_d_mode: true
+    publish_tf: false
+    print_diagnostics: true
+    predict_to_current_time: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # wheel speed: vx from the VESC (erpm, calibrated speed_to_erpm_gain), vy = 0 (rear axle, no slip).
+    # The /odom yaw rate is NOT used: it comes from the servo command and the config's wheelbase.
+    odom0: /odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,
+                   false, false, false,
+                   false, false, false]
+    odom0_differential: false
+
+    # gyro yaw rate (imu_zupt_prep: bias-calibrated at standstill, rad/s)
+    imu0: /sensors/imu/data
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+
+    # zero-velocity updates while parked
+    twist0: /zupt
+    twist0_config: [false, false, false,
+                    false, false, false,
+                    true,  true,  false,
+                    false, false, true,
+                    false, false, false]

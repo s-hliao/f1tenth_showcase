@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>showcase_fleet</name>
+  <version>1.0.0</version>
+  <description>
+    Two-car showcase demo. Car side: fleet_relay (the only Wi-Fi bridge), drive_gate (start/stop latch), carctl.
+    Laptop side: ground_station GUI (live view + start/stop), lla_estimator (LLA Cf/Cr/mu, ground only),
+    viz_ref_fiala (offline replay). CycloneDDS configs keep each car's driving stack on a loopback-only domain.
+  </description>
+  <maintainer email="hzl@andrew.cmu.edu">DRIVE Lab</maintainer>
+  <license>MIT</license>
+
+  <!-- both sides -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>rmw_cyclonedds_cpp</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <!-- car side -->
+  <exec_depend>showcase_state_estimation</exec_depend>
+  <exec_depend>frenet_baseline</exec_depend>
+  <!-- laptop side (lla_estimator / ground_station / viz_ref_fiala); not needed on the cars:
+       llampc (lla_drive_ws) + jax, matplotlib, scipy -->
+  <exec_depend>python3-matplotlib</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

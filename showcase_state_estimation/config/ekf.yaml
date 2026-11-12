@@ -1,0 +1,47 @@
+# Ported from lla_drive_ws/src/llampc/config/ekf.yaml (particle filter input).
+# Output: /odometry/filtered (x, y, yaw, vx, vy, yaw rate at the cg frame), consumed by showcase_fleet's relay
+# and by the laptop LLA estimator. The LQR (frenet_bv3) does NOT use it: it reads /pf/pose/odom directly.
+ekf_filter_node:
+  ros__parameters:
+    frequency: 40.0
+    two_d_mode: true          # Essential for ground vehicles (locks Z, Roll, Pitch to 0)
+    publish_tf: false         # showcase: OFF. The PF / mocap node owns map->base TF; nothing on the car needs the EKF TF
+    print_diagnostics: true
+
+    map_frame: map
+    odom_frame: odom
+    world_frame: map
+
+    base_link_frame: cg
+
+    # ---------------------------------------------------------
+    # INPUT 1: Particle Filter (Absolute Location)
+    # ---------------------------------------------------------
+    odom0: /pf/pose/odom
+    odom0_config: [true,  true,  false,  # X, Y
+                   false, false, true,   # Yaw
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    
+    # ---------------------------------------------------------
+    # INPUT 2: Cleaned VESC IMU (Drift & Momentum)
+    # ---------------------------------------------------------
+    imu0: /sensors/imu/data
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,    # Yaw Velocity (Gyro Z)
+                  true,  true,  false]   # X, Y Acceleration (Drift detection!)
+    imu0_relative: true
+    imu0_linear_acceleration_rejection_threshold: 0.2
+
+    # ---------------------------------------------------------
+    # INPUT 3: ZUPT (Anti-Phantom Drift)
+    # ---------------------------------------------------------
+    twist0: /zupt
+    twist0_config: [false, false, false,
+                    false, false, false,
+                    true,  true,  false,  # Locks Vx, Vy to 0 when parked
+                    false, false, true,   # Locks Vyaw to 0 when parked
+                    false, false, false]

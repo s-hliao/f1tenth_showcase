@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Car CycloneDDS config (ported from llampc/utils/cycloneddscar.xml). Rendered by scripts/dds_env.sh.
+     Domain @LOCAL_DOMAIN@: the driving stack, loopback ONLY - unreachable from Wi-Fi.
+     Domain @NET_DOMAIN@: fleet_relay's network side, unicast to the ground-station laptop over Wi-Fi. -->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain Id="@LOCAL_DOMAIN@">
+    <General>
+      @LO_IFACE_XML@
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers>
+        <Peer Address="127.0.0.1"/>
+      </Peers>
+      <MaxAutoParticipantIndex>64</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+
+  <Domain Id="@NET_DOMAIN@">
+    <General>
+      @NET_IFACE_XML@
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers>
+@PEERS@
+      </Peers>
+      <MaxAutoParticipantIndex>20</MaxAutoParticipantIndex>
+    </Discovery>
+    <Internal>
+      <Watermarks>
+        <WhcHigh>500kB</WhcHigh>
+      </Watermarks>
+    </Internal>
+  </Domain>
+</CycloneDDS>
