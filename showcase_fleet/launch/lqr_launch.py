@@ -21,6 +21,7 @@ from launch_ros.actions import Node
 
 from showcase_fleet.common import check_car_env
 
+DR_SPEED = '0.7'      # [m/s] default top speed with pose:=dr (first laps of an unmapped track)
 GATE_REMAPS = [('/drive', '/showcase/drive_raw'), ('/commands/motor/brake', '/showcase/brake_raw')]
 
 
@@ -83,11 +84,15 @@ def _overrides(params_file, get):
         extra['pose_topic'] = '/dr/pose/odom'
     elif get('pose') not in ('', 'pf'):
         extra['pose_topic'] = get('pose')
-    if get('speed_max'):
-        planner['SPEED_MAX'] = float(get('speed_max'))
+    speed_max = get('speed_max') or (DR_SPEED if get('pose') == 'dr' else '')   # dead reckoning: slow by default
+    if speed_max:
+        planner['SPEED_MAX'] = float(speed_max)
+        base_min = float(base.get('planner', {}).get('SPEED_MIN', 1.0))
+        if planner['SPEED_MAX'] < base_min:           # bv3: v = max(SPEED_MIN, min(v_ref, SPEED_MAX))
+            planner['SPEED_MIN'] = planner['SPEED_MAX']
     if get('speed_scale'):
         planner['SPEED_SCALE'] = float(get('speed_scale'))
-    if get('avoid'):                             # obstacle avoidance (BaS) inside bv3: avoid.ENABLE
+    if get('avoid'):                             # obstacle avoidance (BaS) inside bv3: avoid.ENABLE (default ON)
         extra['avoid'] = {'ENABLE': get('avoid').strip().lower() in ('1', 'true', 'yes', 'on')}
     over = dict(extra)
     if track:
@@ -136,9 +141,9 @@ def generate_launch_description():
         ('track', '', 'waypoints folder, e.g. ethzmobil_cw | ethzmobil_ccw | venue_ccw (default: bv3_car.yaml)'),
         ('line', '', 'raceline file in it, e.g. raceline_dr.csv | raceline_stable.csv'),
         ('pose', 'pf', 'pf (/pf/pose/odom) | dr (/dr/pose/odom, dead reckoning) | <topic>'),
-        ('speed_max', '', 'planner.SPEED_MAX override [m/s]'),
+        ('speed_max', '', f'planner.SPEED_MAX override [m/s] (pose:=dr default {DR_SPEED})'),
         ('speed_scale', '', 'planner.SPEED_SCALE override'),
-        ('avoid', '', 'true | false: bv3 obstacle avoidance (avoid.ENABLE; default from the params file)'),
+        ('avoid', 'true', 'true | false: bv3 obstacle avoidance (avoid.ENABLE)'),
     ]
     return LaunchDescription([DeclareLaunchArgument(n, default_value=d, description=h) for n, d, h in args] +
                              [OpaqueFunction(function=_setup)])

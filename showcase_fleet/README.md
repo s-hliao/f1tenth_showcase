@@ -71,8 +71,8 @@ source ~/f1tenth_showcase/install/showcase_fleet/share/showcase_fleet/scripts/dd
 
 ros2 launch showcase_fleet car_launch.py     # T1: f1tenth_system + PF + EKF + gate + relay (boots STOPPED)
                                              #     (cars are set up in ~/showcase_demo_ws: source its install/)
-ros2 launch showcase_fleet lqr_launch.py     # T2: the LQR; its output waits behind the gate
-ros2 run showcase_fleet carctl               # T3 (optional): s = start, space = stop; works with no laptop
+ros2 run showcase_fleet lqr                  # T2: the LQR + start/stop keys: s = start, space = stop, q = stop+quit
+ros2 run showcase_fleet carctl               # optional, any other terminal: s / space (works with no laptop)
 ```
 `car_launch` and `lqr_launch` refuse to start unless the shell has sourced `dds_env.sh car <car>`. Never run `frenet_bv3.py` by hand: without `lqr_launch`'s remaps it would bypass the gate. If that happens, the gate reports `!BYPASS` in its state.
 
@@ -96,6 +96,8 @@ ros2 launch showcase_fleet ground_launch.py                  # cars:=car2 to run
 | car_launch | `autostart` | false | gate boots RUNNING |
 | car_launch | `stop_decel` | 4.0 | soft stop: speed ramp [m/s²] while still following the line |
 | car_launch | `relay_config` | `config/relay.yaml` | topics broadcast to the laptop; add rows here, no code changes needed |
+| lqr_launch | `avoid` | `true` | bv3 obstacle avoidance (BaS) on the LiDAR |
+| lqr_launch | `pose` | `pf` | `dr` = dead reckoning; then `speed_max` defaults to 0.7 m/s (otherwise regular LQR speeds) |
 | lqr_launch | `controller` | `bv3` | or `<package>/<executable>`; the obstacle-avoidance stack plugs in here |
 | lqr_launch | `params` | `frenet_baseline/config/bv3_car.yaml` | |
 | ground_launch | `track` / `line` | `venue_ccw` / `raceline_stable.csv` | the raceline the LQR follows |
@@ -115,8 +117,7 @@ ros2 launch showcase_fleet ground_launch.py                  # cars:=car2 to run
 ```bash
 ros2 run showcase_state_estimation imu_check        # once per car (bringup running): turn the car left -> OK
 ros2 launch showcase_fleet car_launch.py mode:=dr localize:=false      # T1: keep the car still ~3 s (gyro bias)
-ros2 launch showcase_fleet lqr_launch.py track:=ethzmobil_cw line:=raceline_dr.csv pose:=dr speed_max:=1.5   # T2
-ros2 run showcase_fleet carctl start                # or START on the ground station; it laps until a stop
+ros2 run showcase_fleet lqr track:=ethzmobil_cw line:=raceline_dr.csv pose:=dr   # T2: s = start, space = stop, q = quit
 ```
 Ground station: `ros2 launch showcase_fleet ground_launch.py track:=ethzmobil_cw line:=raceline_dr.csv`.
 

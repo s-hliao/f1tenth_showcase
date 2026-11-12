@@ -30,6 +30,7 @@ setup(
             'drive_gate = showcase_fleet.drive_gate:main',
             'fleet_relay = showcase_fleet.fleet_relay:main',
             'carctl = showcase_fleet.carctl:main',
+            'lqr = showcase_fleet.lqr_cli:main',
             # laptop
             'ground_station = showcase_fleet.ground_station:main',
             'lla_estimator = showcase_fleet.lla_estimator:main',

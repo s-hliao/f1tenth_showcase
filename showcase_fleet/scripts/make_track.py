@@ -123,8 +123,8 @@ def main():
                     help='spline smoothing per point [m^2]; 0 = interpolate the given points (smoothing cuts corners '
                          'and makes them TIGHTER)')
     ap.add_argument('--half-width', type=float, default=0.8)
-    ap.add_argument('--dr-ay', type=float, default=1.5)
-    ap.add_argument('--dr-vmax', type=float, default=2.0)
+    ap.add_argument('--dr-ay', type=float, default=1.0)
+    ap.add_argument('--dr-vmax', type=float, default=0.7)
     ap.add_argument('--ay', type=float, default=3.1)
     ap.add_argument('--vmax', type=float, default=4.0)
     a = ap.parse_args()
