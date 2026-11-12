@@ -8,10 +8,10 @@ bv3:
     # Raceline = ROOT/NAME/RACELINE. MAP = ROOT/NAME/MAP. Any entry that starts with / or ~ is used as-is.
     # MAP is only a sanity check (raceline inside the map?). The particle filter's map is set in ITS launch.
     track:
-      ROOT: "~/f1tenth_ws/src/frenet_baseline/waypoints"
+      ROOT: "~/f1tenth_showcase/src/frenet_baseline/waypoints"
       NAME: "venue_ccw"                  # venue_ccw | venue_cw | venue_ccw_ay59 | venue_cw_ay59
       RACELINE: "raceline_stable.csv"    # raceline_stable | raceline_fast | raceline_optimal | centerline
-      MAP: "~/f1tenth_ws/src/frenet_baseline/maps/racetrack_map.yaml"
+      MAP: "~/f1tenth_showcase/src/frenet_baseline/maps/racetrack_map.yaml"
 
     pose_topic: "/pf/pose/odom"
     odom_topic: ""                       # '' = speed from the pose message
