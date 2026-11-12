@@ -1,0 +1,30 @@
+# bv1 + Barrier States (BaS) obstacle-avoidance demo, AIMS map.
+#   python3 frenet_pursuit_bas.py --ros-args --params-file bas_demo.yaml -p speed_max:=3.0
+# Only bas_enable / speed_max change between demo runs. Every bas.* value below is the tested default
+# (listed so it shows up in the bag metadata and can be quoted in the report).
+frenet_pursuit_node:
+  ros__parameters:
+    waypoint_file: '~/f1tenth_ws/src/pure_pursuit/scripts/aims_centerline_ccw.csv'   # run script picks ccw / cw
+    odom_topic: '/pf/pose/odom'
+    speed_max: 3.0           # demo speed cap [m/s]; the run script overrides it per run
+    speed_min: 1.2           # corner floor; AIMS corners are tight (radius about 0.5 m)
+    guard_enable: false      # old bv1 guard (no time sync) stays off for the demo
+    bas_enable: true
+    bas:
+      BAS_OBSTACLES: true
+      BAS_WALLS: false       # wall barriers off: the bv1 path already stays inside the walls
+      CAR_HALF_WIDTH: 0.15
+      BAS_MARGIN: 0.10       # extra clearance around the car [m]
+      H_ACT_OBS: 4.0         # barrier switches on when the safety function h drops below this
+      T_LOOK: 0.45           # obstacle ellipse stretched ahead by T_LOOK * v [s]
+      K_B_OBS: 3.0           # barrier-state gain (how hard d_ref is pushed)
+      K_DB_OBS: 0.10         # gain on the rate of the barrier
+      K_RELAX: 1.5           # d_ref decay back to the line when clear [1/s]
+      DREF_RATE_MAX: 3.0     # max lateral shift rate of the reference [m/s]
+      K_BV: 0.8              # speed scale 1/(1 + K_BV*B~ + K_BV_RETURN*|d_ref|)
+      K_BV_RETURN: 0.3
+      V_BAS_MIN: 2.0         # lowest speed while BaS is active [m/s]
+      LASER_X: 0.0           # bv1 pose is already the laser point
+      RANGE_MIN: 0.30        # ignore the car's own returns
+      OBS_RANGE: 6.0         # detection range ahead [m]
+      OBS_BIRTH_RANGE: 1.5   # new obstacles must first be seen farther than this

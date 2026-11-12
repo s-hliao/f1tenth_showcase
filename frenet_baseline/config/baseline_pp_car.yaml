@@ -1,0 +1,133 @@
+# bv2 on the car WITH barrier-state (BaS) obstacle avoidance.
+# Same driving as baseline_pp_car_bv2.yaml (pure pursuit, K_US 0.0215, reaction scale, pose guard),
+# plus the avoidance block below, tested offline on the venue map and on the real venue bags (2026-09-30).
+#
+# ros2 launch frenet_baseline baseline_pp_launch.py config:=car_bas track:=venue_ccw line:=centerline.csv
+#
+# Changes vs the sim defaults, and why:
+#   RANGE_MIN 0.10 -> 0.30  the LiDAR sees the car itself at 2-11 deg, 0.13-0.19 m (in 63-84 % of scans in both
+#                           venue bags). With 0.10 that is a permanent "obstacle" right in front of the car.
+#   H_SWITCH  1.0  -> 1000  pass side is picked once per obstacle and kept. With 1.0 the side could flip
+#                           while the car was already beside the obstacle (h rises again) -> steered into it.
+#   BAS_MARGIN 0.05 -> 0.10 more clearance for the ~140 ms steering delay measured on the car.
+#   CAR_REAR  0.135 -> 0.40 the pose is the LASER point (/pf/pose/odom), so the footprint is measured from
+#                           the laser: rear bumper is 0.135 + 0.26 behind it.
+#   LASER_X stays 0.26      the pose guard needs it (lever arm base_link -> laser). For detection the true value
+#                           relative to the laser pose is 0.0 (points land 0.26 m too far ahead; tested, works).
+#   SPEED_MAX 3.0           first avoidance runs.
+#   OBS_BIRTH_RANGE 1.5     a new obstacle must first be seen > 1.5 m away (floor bump at (14.0,-12.2) and the car's
+#                           own returns appear 0.6-0.7 m ahead; a real box is seen from metres away).
+#   OBS_EDGE_JUMP 0.3       beams beside an obstacle must read >= 0.3 m farther on both sides (OBS_EDGE_SIDES 2):
+#                           a wall piece shifted into the track by a heading error has no such jump.
+#                           Real bags: strong false activations 25 -> 8. Sim: 48/48 clean.
+#                           OBS_EDGE_SIDES 2 leaves boxes touching a wall to the wall barrier (fine on the centerline;
+#                           use 1 with racelines that hug the walls).
+#   Steering: FRENET_PD KP 0.45 / KD 0.55 / V_REF 3.0, reaction scale off (as run in bv2_runf1).
+baseline_pp:
+  ros__parameters:
+    # ---- inputs: same as bv1 ----
+    pose_topic: "/pf/pose/odom"
+    odom_topic: ""
+    scan_topic: "/scan"
+
+    # ---- steering ----
+    STEER_LAW: "FRENET_PD"
+    WHEELBASE: 0.325
+    LA_TIME: 0.25
+    LA_MIN: 0.8
+    LA_MAX: 2.5
+    K_US: 0.0215                            # car value (bv1), not the tyre-model 0.0029
+    STEER_LIMIT: 0.40
+    STEER_STEP_MAX: 0.18                    # rad per pose cycle, same as bv1
+    A_Y_MAX: 0.0
+    KP: 0.45
+    KD: 0.55
+    V_REF: 3.0
+    POSE_TO_REAR_AXLE_M: 0.0
+
+    # ---- reaction scale ----
+    REACT_V0: 0.0                           # [m/s] full correction below this; 0.0 = off
+    REACT_EXP: 2.0
+    REACT_MIN: 0.2
+
+    # ---- speed ----
+    RACELINE_XY_ONLY: false
+    SPEED_SCALE: 1.0
+    SPEED_MAX: 7.5                          # avoidance tests: 3.0 first, then 3.5
+    SPEED_MIN: 2.5
+    SPEED_PREVIEW_T: 0.20
+
+    # ---- braking: same as bv1 ----
+    BRAKE_ENABLE: true
+    BRAKE_THRESHOLD: 0.5
+    BRAKE_CURRENT_MIN: 3000.0
+    BRAKE_CURRENT_MAX: 8000.0
+
+    # ---- pose guard: PF heading checked against the EKF (/odometry/filtered) ----
+    GUARD_ENABLE: true
+    GUARD_HEAD_GATE: 0.35                   # [rad] ~20 deg
+    GUARD_SPEED_CAP: 3.0                    # [m/s] while the PF is ignored
+    GUARD_MAX_REJECT_S: 10.0
+
+    WARMUP_CYCLES: 10
+    TELEMETRY_ENABLE: true
+    VIZ_ENABLE: false
+
+    # ---- avoidance: barrier state path shaping ----
+    AVOID_ENABLE: false                      # launch avoid:=false turns it off without editing this file
+    BAS_WALLS: true
+    BAS_OBSTACLES: true
+    # car footprint, measured from the pose point (= laser)
+    CAR_HALF_WIDTH: 0.15
+    CAR_FRONT: 0.414                        # kept: 0.25 m extra look-ahead covers the steering delay
+    CAR_REAR: 0.40                          # laser -> rear bumper
+    BAS_MARGIN: 0.10                        # extra clearance [m]
+    TRACK_HALF_W: 0.8
+    # barrier shape
+    H_ACT_WALL: 0.10
+    H_ACT_OBS: 4.0
+    T_LOOK: 0.8
+    T_LOOK_WALL: 0.30
+    H_MIN: 0.001
+    B_MAX: 200.0
+    ZDOT_MAX: 500.0
+    DENOM_MIN: 0.1
+    # barrier state -> d_ref
+    K_B_WALL: 0.30
+    K_DB_WALL: 0.0005
+    K_B_OBS: 3.0
+    K_DB_OBS: 0.10
+    K_RELAX: 1.5                            # pull back to the line [1/s]
+    DREF_RATE_MAX: 3.0
+    DREF_EPS: 0.005
+    GAP_HYST: 0.05
+    H_SWITCH: 1000.0                        # pass side locked once chosen
+    K_BV: 0.8                               # slow down for obstacles ahead
+    K_BV_RETURN: 0.3                        # stay slower while off the line
+    V_BAS_MIN: 1.0
+    # LiDAR obstacle detection
+    LASER_X: 0.26
+    LASER_Y: 0.0
+    SCAN_STRIDE: 2
+    SCAN_FOV_DEG: 200.0
+    RANGE_MIN: 0.30                         # drops the car's own returns (0.13-0.19 m)
+    OBS_RANGE: 6.0
+    OBS_BEHIND: 0.6
+    WALL_GATE: 0.15
+    CLUSTER_GAP: 0.25
+    MIN_PTS: 3
+    OBS_R_MIN: 0.15
+    OBS_PERSIST: 2
+    OBS_CLEAR: 4
+    OBS_BIRTH_RANGE: 1.5                    # [BIRTH] 0.0 = off
+    OBS_MATCH_DS: 1.0
+    OBS_MATCH_DD: 0.5
+    OBS_EDGE_JUMP: 0.3                      # [EDGE] 0.0 = off
+    OBS_EDGE_SIDES: 2
+
+# ---------------- tuning, one change per run ----------------
+# swerves with nothing on the track      -> check /telemetry n_obstacles; send the bag (detector replay)
+# passes too close                       -> BAS_MARGIN 0.10 -> 0.15
+# reacts late at 3.5 m/s                 -> T_LOOK 0.45 -> 0.60
+# slow to come back to the line          -> K_RELAX 1.5 -> 2.0
+# brakes too hard near obstacles         -> K_BV 0.5 -> 0.3

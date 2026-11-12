@@ -1,0 +1,96 @@
+# Sim parameters for frenet_baseline (f1tenth_gym_ros). Every parameter with its default.
+# ros2 launch frenet_baseline baseline_pp_launch.py config:=sim track:=iros_2026_sim
+baseline_pp:
+  ros__parameters:
+    # ---- inputs ----
+    pose_topic: "/ego_racecar/odom"        # car: "/pf/pose/odom"
+    odom_topic: ""                          # car: "/odom"  ('' = speed from the pose message)
+    # raceline_file / track_id are set by the launch file (track:=, line:=)
+    # ---- vehicle (config/vehicle_params.yaml) ----
+    WHEELBASE: 0.325
+    POSE_TO_REAR_AXLE_M: 0.0
+    STEER_LIMIT: 0.40
+    STEER_RATE_MAX: 3.2
+    C_SF: 4.718
+    C_SR: 5.4562
+    K_US: -1.0                              # <0 = auto from C_SF, C_SR
+    A_Y_MAX: 0.0
+    # ---- steering law: PURE_PURSUIT | FRENET_PD ----
+    STEER_LAW: "PURE_PURSUIT"
+    LA_TIME: 0.25
+    LA_MIN: 0.8
+    LA_MAX: 2.5
+    KP: 0.610
+    KD: 0.510
+    V_REF: 4.8
+    V_MIN_SCHED: 1.0
+    FF_PREVIEW_T: 0.12
+    FF_PREVIEW_MIN: 0.3
+    # ---- speed (8 m/s ladder: 0.6 -> 0.8 -> 0.9 -> 1.0) ----
+    SPEED_SCALE: 0.6
+    SPEED_MAX: 8.0
+    SPEED_MIN: 1.0
+    SPEED_PREVIEW_T: 0.10
+    # ---- brake channel (car only) ----
+    BRAKE_ENABLE: false
+    BRAKE_THRESHOLD: 0.5
+    BRAKE_CURRENT_MIN: 3000.0
+    BRAKE_CURRENT_MAX: 8000.0
+    # ---- avoidance: barrier state path shaping (AVOID_ENABLE false = baseline unchanged) ----
+    AVOID_ENABLE: false
+    BAS_WALLS: true   # wall barriers on d_ref and on the car's front bumper
+    BAS_OBSTACLES: true   # LiDAR obstacle barriers
+    # car footprint relative to the rear axle (vehicle_params.yaml)
+    CAR_HALF_WIDTH: 0.15
+    CAR_FRONT: 0.414   # rear axle -> front bumper [m]
+    CAR_REAR: 0.135   # rear axle -> rear bumper [m]
+    BAS_MARGIN: 0.05   # extra clearance [m]
+    TRACK_HALF_W: 0.8   # walls for legacy x,y files (no width columns)
+    # barrier shape
+    H_ACT_WALL: 0.10   # wall barrier switches on below this clearance [m]
+    H_ACT_OBS: 2.0   # obstacle barrier switches on below this ellipse level
+    T_LOOK: 0.45   # ellipse grows ahead by T_LOOK * v [s]
+    T_LOOK_WALL: 0.30   # front bumper predicted this far ahead for the wall check [s]
+    H_MIN: 0.001
+    B_MAX: 200.0
+    ZDOT_MAX: 500.0
+    DENOM_MIN: 0.1   # floor for (1 - kappa*d)
+    # barrier state -> d_ref dynamics:  d_ref_dot = sum side*max(0, K_B*B~ + K_DB*z_dot) - K_RELAX*d_ref
+    K_B_WALL: 0.30
+    K_DB_WALL: 0.0005
+    K_B_OBS: 2.0
+    K_DB_OBS: 0.10
+    K_RELAX: 1.5   # pull back to the raceline [1/s]
+    DREF_RATE_MAX: 3.0   # |d_ref_dot| limit [m/s]
+    DREF_EPS: 0.005   # snap d_ref to exactly 0 below this when inactive [m]
+    GAP_HYST: 0.05   # side switch needs the other gap this much bigger [m]
+    H_SWITCH: 1.0   # side may only switch while the obstacle ellipse level h > this
+    K_BV: 0.5   # speed scale 1/(1 + K_BV * sum B~ ahead)
+    K_BV_RETURN: 1.0   # while back-stepping to the line: 1/(1 + K_BV_RETURN*|d_ref|)
+    V_BAS_MIN: 1.0   # never slower than this while avoiding [m/s]
+    # LiDAR obstacle detection
+    LASER_X: 0.26   # laser position from the rear axle [m]
+    LASER_Y: 0.0
+    SCAN_STRIDE: 2   # use every 2nd beam
+    SCAN_FOV_DEG: 200.0   # beams used, centred ahead
+    RANGE_MIN: 0.10
+    OBS_RANGE: 6.0   # detection distance [m]
+    OBS_BEHIND: 0.6   # keep obstacles this far behind the rear axle [m]
+    WALL_GATE: 0.15   # points closer than this to a wall are wall, not obstacle [m]
+    CLUSTER_GAP: 0.25   # beam-to-beam jump that starts a new obstacle [m]
+    MIN_PTS: 3   # smallest cluster that counts
+    OBS_R_MIN: 0.15   # minimum obstacle half-size [m]
+    OBS_PERSIST: 2   # scans in a row before obstacles are trusted
+    OBS_CLEAR: 4   # scans without obstacles before they are dropped
+    # ---- tracking ----
+    MAX_WALK_SEGS: 50
+    RELOC_DIST_M: 1.5
+    WARMUP_CYCLES: 10
+    # ---- recording ----
+    TELEMETRY_ENABLE: true
+    VIZ_ENABLE: true                        # race: false
+    VIZ_RATE_HZ: 20.0
+    STALE_POSE_MS: 60.0
+    STALE_ODOM_MS: 60.0
+    STALE_SCAN_MS: 100.0
+    scan_topic: "/scan"
