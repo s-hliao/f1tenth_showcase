@@ -14,7 +14,7 @@ import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, LaserScan
 
 from showcase_fleet import common as C
 
@@ -60,10 +60,39 @@ class FakeCar(Node):
         self.imu_pub = self.create_publisher(Imu, '/sensors/imu/raw', 1)        # VESC IMU: gyro deg/s, accel g
         self.declare_parameter('gyro_bias_dps', 0.4)                            # realistic MEMS bias [deg/s]
         self.gyro_bias = float(self.get_parameter('gyro_bias_dps').value)
+        # synthetic LiDAR at the laser point: flat list x1, y1, r1, x2, ... of round obstacles in the track frame
+        self.declare_parameter('obstacles', [0.0])
+        ob = [float(v) for v in self.get_parameter('obstacles').value]
+        self.obstacles = [ob[i:i + 3] for i in range(0, len(ob) - 2, 3)]
+        self.scan_pub = self.create_publisher(LaserScan, '/scan', 1)
+        self.scan_ang = np.linspace(-2.356, 2.356, 1081)
+        self.create_timer(1.0 / 20.0, self.scan)
         self.vesc_pub = self.create_publisher(VescStateStamped, '/sensors/core', 1) if VescStateStamped else None
         self.create_subscription(AckermannDriveStamped, C.DRIVE_OUT_TOPIC, self.on_drive, 1)
         self.create_timer(self.dt, self.step)
         self.t_drive = 0.0
+
+    def scan(self):
+        lx, ly = self.x + 0.26 * math.cos(self.yaw), self.y + 0.26 * math.sin(self.yaw)
+        a = self.yaw + self.scan_ang
+        dx, dy = np.cos(a), np.sin(a)
+        r = np.full(len(a), 30.0)
+        for ox, oy, rad in self.obstacles:          # ray / circle intersection
+            fx, fy = lx - ox, ly - oy
+            b = fx * dx + fy * dy
+            c = fx * fx + fy * fy - rad * rad
+            disc = b * b - c
+            t = -b - np.sqrt(np.maximum(disc, 0.0))
+            hit = (disc >= 0) & (t > 0)
+            r = np.where(hit, np.minimum(r, t), r)
+        m = LaserScan()
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.header.frame_id = 'laser'
+        m.angle_min, m.angle_max = float(self.scan_ang[0]), float(self.scan_ang[-1])
+        m.angle_increment = float(self.scan_ang[1] - self.scan_ang[0])
+        m.range_min, m.range_max = 0.06, 30.0
+        m.ranges = (r + np.random.normal(0, 0.01, len(r))).astype(np.float32).tolist()
+        self.scan_pub.publish(m)
 
     def on_drive(self, msg):            # what the gate lets through = what the "VESC" executes
         self.v_cmd = float(msg.drive.speed)

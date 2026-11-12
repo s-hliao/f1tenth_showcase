@@ -87,6 +87,8 @@ def _overrides(params_file, get):
         planner['SPEED_MAX'] = float(get('speed_max'))
     if get('speed_scale'):
         planner['SPEED_SCALE'] = float(get('speed_scale'))
+    if get('avoid'):                             # obstacle avoidance (BaS) inside bv3: avoid.ENABLE
+        extra['avoid'] = {'ENABLE': get('avoid').strip().lower() in ('1', 'true', 'yes', 'on')}
     over = dict(extra)
     if track:
         over['track'] = track
@@ -136,6 +138,7 @@ def generate_launch_description():
         ('pose', 'pf', 'pf (/pf/pose/odom) | dr (/dr/pose/odom, dead reckoning) | <topic>'),
         ('speed_max', '', 'planner.SPEED_MAX override [m/s]'),
         ('speed_scale', '', 'planner.SPEED_SCALE override'),
+        ('avoid', '', 'true | false: bv3 obstacle avoidance (avoid.ENABLE; default from the params file)'),
     ]
     return LaunchDescription([DeclareLaunchArgument(n, default_value=d, description=h) for n, d, h in args] +
                              [OpaqueFunction(function=_setup)])

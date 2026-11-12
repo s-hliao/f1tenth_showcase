@@ -13,3 +13,7 @@
 # ament_python packages need their resource/<pkg> marker (overrides **/resource above)
 !/showcase_fleet/resource
 !/showcase_state_estimation/resource
+
+# python bytecode
+__pycache__/
+*.pyc
